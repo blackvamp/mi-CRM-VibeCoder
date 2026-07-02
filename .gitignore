@@ -41,8 +41,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# convex (se regenera con `npx convex dev` / `npx convex deploy`)
-convex/_generated
+# convex: `_generated` SÍ se versiona para que `npm run build` sea reproducible
+# desde un checkout limpio (Railway build no ejecuta codegen, y `convex codegen`
+# requiere credenciales del deployment). Regenerar con `npx convex dev`.
 
 # credenciales de convex exclusivas de esta carpeta (nunca commitear)
 .convex-home/

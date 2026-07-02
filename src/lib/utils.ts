@@ -27,9 +27,21 @@ export function shortDate(iso: string): string {
   return `${parseInt(d, 10)} ${MESES[parseInt(m, 10) - 1]}`;
 }
 
+/**
+ * Fecha local "YYYY-MM-DD" (zona horaria del navegador del usuario, NO UTC).
+ * Usar SIEMPRE esto para "hoy" — `toISOString()` daría el día en UTC y, cerca de
+ * medianoche en husos como México (UTC-6), clasificaría mal atrasado/hoy/próximo.
+ */
+export function hoyLocalISO(d: Date = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 /** "Hoy" / "Ayer" / "Hace N días" / "Hace N semanas" respecto a una fecha de referencia. */
 export function relativeLabel(iso: string, today: Date = new Date()): string {
-  const ref = new Date(today.toISOString().slice(0, 10) + "T00:00:00");
+  const ref = new Date(hoyLocalISO(today) + "T00:00:00");
   const target = new Date(iso + "T00:00:00");
   const days = Math.round((ref.getTime() - target.getTime()) / 86_400_000);
   if (days <= 0) return "Hoy";

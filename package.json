@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@auth/core": "^0.41.1",
+    "@convex-dev/auth": "^0.0.94",
     "clsx": "^2.1.1",
     "convex": "^1.42.1",
     "lucide-react": "^1.23.0",

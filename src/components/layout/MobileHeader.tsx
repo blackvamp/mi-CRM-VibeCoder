@@ -5,16 +5,16 @@ import { usePathname, useRouter } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { SECTION_TITLES } from "@/lib/nav";
 import { Avatar } from "@/components/ui/Avatar";
+import { useUsuarioActual } from "@/lib/useSesion";
 
 /**
- * Cabecera compartida (móvil y escritorio: 60px, borde inferior).
- * Botón atrás automático en subrutas (p. ej. /clientes/123).
- * Acciones específicas de cada pantalla (Editar, Nuevo cliente…) se
- * renderizan dentro del propio contenido de la página, no aquí.
+ * Cabecera compartida (60px, borde inferior). Botón atrás automático en
+ * subrutas (p. ej. /clientes/123). El avatar abre "Mi cuenta".
  */
 export function MobileHeader() {
   const pathname = usePathname();
   const router = useRouter();
+  const user = useUsuarioActual();
 
   const base = "/" + pathname.split("/").slice(1, 2).join("");
   const isSubroute = pathname.split("/").filter(Boolean).length > 1;
@@ -40,7 +40,7 @@ export function MobileHeader() {
         aria-label="Mi cuenta"
         className="flex size-11 shrink-0 items-center justify-center rounded-full md:hidden"
       >
-        <Avatar name="Marta López" variant="neutral" size={32} />
+        <Avatar name={user?.name ?? ""} variant="neutral" size={32} />
       </Link>
     </header>
   );

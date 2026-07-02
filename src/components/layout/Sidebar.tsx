@@ -1,14 +1,35 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useState } from "react";
 import { LogOut } from "lucide-react";
+import { useAuthActions } from "@convex-dev/auth/react";
 import { cn } from "@/lib/utils";
-import { NAV_ITEMS } from "@/lib/nav";
 import { Avatar } from "@/components/ui/Avatar";
+import { Button } from "@/components/ui/Button";
+import { Overlay } from "@/components/ui/Overlay";
+import { useNavItems, useUsuarioActual } from "@/lib/useSesion";
+
+const ROL_LABEL: Record<"propietaria" | "comercial", string> = {
+  propietaria: "Dueña",
+  comercial: "Atiende y vende",
+};
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { signOut } = useAuthActions();
+  const navItems = useNavItems();
+  const user = useUsuarioActual();
+  const [confirmar, setConfirmar] = useState(false);
+  const [saliendo, setSaliendo] = useState(false);
+
+  async function cerrarSesion() {
+    setSaliendo(true);
+    await signOut();
+    router.replace("/login");
+  }
 
   return (
     <aside className="hidden h-full w-60 shrink-0 flex-col gap-1 border-r border-border bg-surface p-3.5 md:flex">
@@ -20,7 +41,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-1 flex-col gap-1">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const active = pathname.startsWith(item.href);
           const Icon = item.icon;
           return (
@@ -46,23 +67,55 @@ export function Sidebar() {
           href="/cuenta"
           className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md p-1.5 text-left hover:bg-surface-2"
         >
-          <Avatar name="Marta López" variant="neutral" size={32} />
+          <Avatar name={user?.name ?? ""} variant="neutral" size={32} />
           <div className="flex min-w-0 flex-col">
             <span className="truncate text-[13px] font-medium text-text">
-              Marta López
+              {user?.name ?? "…"}
             </span>
-            <span className="text-xs text-text-subtle">Propietaria</span>
+            <span className="text-xs text-text-subtle">
+              {user ? ROL_LABEL[user.rol] : ""}
+            </span>
           </div>
         </Link>
         <button
           type="button"
           aria-label="Cerrar sesión"
           title="Cerrar sesión"
+          onClick={() => setConfirmar(true)}
           className="flex size-[34px] shrink-0 items-center justify-center rounded-md text-text-subtle hover:bg-surface-2"
         >
           <LogOut className="size-[18px]" aria-hidden />
         </button>
       </div>
+
+      <Overlay
+        open={confirmar}
+        onClose={() => setConfirmar(false)}
+        title="Cerrar sesión"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="compact"
+              onClick={() => setConfirmar(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              size="compact"
+              loading={saliendo}
+              onClick={cerrarSesion}
+            >
+              Cerrar sesión
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-[15px] text-text-muted">
+          ¿Seguro que quieres cerrar sesión?
+        </p>
+      </Overlay>
     </aside>
   );
 }

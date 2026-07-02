@@ -1,7 +1,6 @@
 import { Sidebar } from "@/components/layout/Sidebar";
 import { MobileHeader } from "@/components/layout/MobileHeader";
-import { TabBar } from "@/components/ui/TabBar";
-import { NAV_ITEMS } from "@/lib/nav";
+import { TabBarNav } from "@/components/layout/TabBarNav";
 
 export default function AppShellLayout({
   children,
@@ -18,7 +17,7 @@ export default function AppShellLayout({
             {children}
           </div>
         </main>
-        <TabBar items={NAV_ITEMS} className="md:hidden" />
+        <TabBarNav className="md:hidden" />
       </div>
     </div>
   );
