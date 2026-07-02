@@ -44,5 +44,8 @@ next-env.d.ts
 # convex (se regenera con `npx convex dev` / `npx convex deploy`)
 convex/_generated
 
+# credenciales de convex exclusivas de esta carpeta (nunca commitear)
+.convex-home/
+
 # artefactos de herramientas de desarrollo (MCP, etc.)
 .playwright-mcp/
