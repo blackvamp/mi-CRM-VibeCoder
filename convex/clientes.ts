@@ -37,6 +37,65 @@ export const listar = query({
   },
 });
 
+/**
+ * Lista de clientes con estado calculado y "último contacto", para /clientes (F3).
+ *
+ * Escala MVP: `collect()` de toda la tabla + enriquecido N+1 por cliente (`estadoDe`
+ * colecta ventas; se colectan interacciones por cliente). Aceptable para decenas de
+ * clientes; a cientos/miles habría que paginar o mover la búsqueda al servidor — NO
+ * dejar este patrón como implícito si el volumen crece.
+ *
+ * "Último contacto" = max de `fecha` (ISO, comparación lexicográfica) por collect+reduce.
+ * Hoy la tabla `interacciones` está vacía (el registro llega en TAL-12) → devuelve null.
+ * Optimización futura: `interacciones.by_cliente` no ordena por fecha; para el "más
+ * reciente" eficiente con datos reales, añadir índice compuesto ["clienteId","fecha"].
+ */
+export const listarConEstado = query({
+  args: {},
+  returns: v.array(
+    v.object({
+      _id: v.id("clientes"),
+      nombre: v.string(),
+      empresa: v.optional(v.string()),
+      email: v.optional(v.string()),
+      telefono: v.optional(v.string()),
+      estado: ESTADO_CLIENTE,
+      ultimoContacto: v.union(v.string(), v.null()),
+    }),
+  ),
+  handler: async (ctx) => {
+    await requireUsuario(ctx);
+    const clientes = await ctx.db.query("clientes").collect();
+    const filas = await Promise.all(
+      clientes.map(async (c) => {
+        const estado = await estadoDe(ctx, c._id);
+        const interacciones = await ctx.db
+          .query("interacciones")
+          .withIndex("by_cliente", (q) => q.eq("clienteId", c._id))
+          .collect();
+        const ultimoContacto =
+          interacciones.length === 0
+            ? null
+            : interacciones.reduce(
+                (max, i) => (i.fecha > max ? i.fecha : max),
+                interacciones[0].fecha,
+              );
+        return {
+          _id: c._id,
+          nombre: c.nombre,
+          empresa: c.empresa,
+          email: c.email,
+          telefono: c.telefono,
+          estado,
+          ultimoContacto,
+        };
+      }),
+    );
+    filas.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+    return filas;
+  },
+});
+
 /** Alta rápida de cliente (F1, base). Requiere nombre y ≥1 medio de contacto. */
 export const crear = mutation({
   args: {

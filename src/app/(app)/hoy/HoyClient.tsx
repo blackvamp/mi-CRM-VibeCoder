@@ -14,22 +14,14 @@ import {
 import { api, type Id } from "@/lib/convexApi";
 import { cn, hoyLocalISO, relativeLabel, shortDate } from "@/lib/utils";
 import { Card } from "@/components/ui/Card";
-import { Badge, STATUS_LABELS, type BadgeStatus } from "@/components/ui/Badge";
+import { Badge, STATUS_LABELS } from "@/components/ui/Badge";
+import { ESTADO_BADGE, type EstadoCliente } from "@/lib/estadoCliente";
 import { Avatar } from "@/components/ui/Avatar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { Toast } from "@/components/ui/Toast";
 import { NuevaTareaOverlay } from "@/components/overlays/NuevaTareaOverlay";
 import { NuevoClienteOverlay } from "@/components/overlays/NuevoClienteOverlay";
-
-type EstadoCliente = "nuevo_lead" | "en_negociacion" | "ganado" | "perdido";
-
-const ESTADO_BADGE: Record<EstadoCliente, BadgeStatus> = {
-  nuevo_lead: "info",
-  en_negociacion: "primary",
-  ganado: "success",
-  perdido: "error",
-};
 
 type Seguimiento = {
   _id: Id<"seguimientos">;
