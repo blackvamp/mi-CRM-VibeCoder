@@ -1,26 +1,46 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { AlertCircle } from "lucide-react";
 import { api, type Id } from "@/lib/convexApi";
 import { Overlay } from "@/components/ui/Overlay";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { ChipGroup } from "@/components/ui/ChipGroup";
+
+type Canal = "web" | "redes" | "email" | "whatsapp";
+
+const CANALES: { value: Canal; label: string }[] = [
+  { value: "web", label: "Web" },
+  { value: "redes", label: "Redes" },
+  { value: "email", label: "Email" },
+  { value: "whatsapp", label: "WhatsApp" },
+];
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  /**
+   * Uso embebido (p. ej. desde "Nueva tarea"): recibe el id del cliente recién
+   * creado para preseleccionarlo. Si se omite, el overlay abre su ficha.
+   */
   onCreated?: (id: Id<"clientes">) => void;
 }
 
-/** Alta rápida de cliente (F1, base). Al guardar devuelve el id vía onCreated. */
+/**
+ * Alta rápida de cliente (F1). Al guardar: con `onCreated` (uso embebido) devuelve
+ * el id sin navegar; sin él (standalone) abre la ficha del cliente `/clientes/{id}`.
+ */
 export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
+  const router = useRouter();
   const crear = useMutation(api.clientes.crear);
   const [nombre, setNombre] = useState("");
   const [empresa, setEmpresa] = useState("");
   const [telefono, setTelefono] = useState("");
   const [email, setEmail] = useState("");
+  const [canal, setCanal] = useState<Canal | null>(null);
   const [nota, setNota] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
@@ -30,6 +50,7 @@ export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
     setEmpresa("");
     setTelefono("");
     setEmail("");
+    setCanal(null);
     setNota("");
     setError(null);
     setGuardando(false);
@@ -52,11 +73,16 @@ export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
         empresa: empresa.trim() || undefined,
         telefono: telefono.trim() || undefined,
         email: email.trim() || undefined,
+        canalOrigen: canal ?? undefined,
         nota: nota.trim() || undefined,
       });
-      onCreated?.(id);
       reset();
       onClose();
+      if (onCreated) {
+        onCreated(id);
+      } else {
+        router.push(`/clientes/${id}`);
+      }
     } catch {
       setError("No se pudo guardar. Revisa los datos.");
       setGuardando(false);
@@ -113,6 +139,12 @@ export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+        />
+        <ChipGroup<Canal>
+          label="Canal de origen"
+          options={CANALES}
+          value={canal}
+          onChange={setCanal}
         />
         <Input
           label="Nota"
