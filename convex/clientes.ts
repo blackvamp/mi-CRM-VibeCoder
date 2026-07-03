@@ -11,6 +11,13 @@ export const ESTADO_CLIENTE = v.union(
   v.literal("perdido"),
 );
 
+export const CANAL_ORIGEN = v.union(
+  v.literal("web"),
+  v.literal("redes"),
+  v.literal("email"),
+  v.literal("whatsapp"),
+);
+
 /**
  * Estado calculado del cliente a partir de sus ventas (regla en schema.ts).
  * No es una función pública; se reutiliza desde otras funciones Convex.
@@ -96,6 +103,44 @@ export const listarConEstado = query({
   },
 });
 
+/**
+ * Un cliente por id con su estado calculado, para la ficha (F2). `id` llega como
+ * string (segmento de URL, no confiable) y se valida con `normalizeId`: cualquier id
+ * inválido, de otra tabla o inexistente devuelve `null` — la ficha muestra "Cliente no
+ * encontrado" en vez de propagar un error de argumento de Convex.
+ */
+export const obtener = query({
+  args: { id: v.string() },
+  returns: v.union(
+    v.object({
+      _id: v.id("clientes"),
+      nombre: v.string(),
+      empresa: v.optional(v.string()),
+      telefono: v.optional(v.string()),
+      email: v.optional(v.string()),
+      canalOrigen: v.optional(CANAL_ORIGEN),
+      estado: ESTADO_CLIENTE,
+    }),
+    v.null(),
+  ),
+  handler: async (ctx, args) => {
+    await requireUsuario(ctx);
+    const id = ctx.db.normalizeId("clientes", args.id);
+    if (id === null) return null;
+    const c = await ctx.db.get(id);
+    if (c === null) return null;
+    return {
+      _id: c._id,
+      nombre: c.nombre,
+      empresa: c.empresa,
+      telefono: c.telefono,
+      email: c.email,
+      canalOrigen: c.canalOrigen,
+      estado: await estadoDe(ctx, c._id),
+    };
+  },
+});
+
 /** Alta rápida de cliente (F1, base). Requiere nombre y ≥1 medio de contacto. */
 export const crear = mutation({
   args: {
@@ -103,14 +148,7 @@ export const crear = mutation({
     empresa: v.optional(v.string()),
     telefono: v.optional(v.string()),
     email: v.optional(v.string()),
-    canalOrigen: v.optional(
-      v.union(
-        v.literal("web"),
-        v.literal("redes"),
-        v.literal("email"),
-        v.literal("whatsapp"),
-      ),
-    ),
+    canalOrigen: v.optional(CANAL_ORIGEN),
     nota: v.optional(v.string()),
   },
   returns: v.id("clientes"),
@@ -131,5 +169,41 @@ export const crear = mutation({
       canalOrigen: args.canalOrigen,
       nota: args.nota?.trim() || undefined,
     });
+  },
+});
+
+/**
+ * Edita los datos de contacto de un cliente (F2). NO toca `canalOrigen`/`nota` ni el
+ * estado (calculado desde ventas). Misma regla que el alta: nombre + ≥1 medio de
+ * contacto. `id` es `v.id` porque llega del doc ya cargado (fuente confiable), no de la URL.
+ */
+export const actualizar = mutation({
+  args: {
+    id: v.id("clientes"),
+    nombre: v.string(),
+    empresa: v.optional(v.string()),
+    telefono: v.optional(v.string()),
+    email: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    await requireUsuario(ctx);
+    const cliente = await ctx.db.get(args.id);
+    if (cliente === null) throw new ConvexError("Cliente no encontrado");
+    const nombre = args.nombre.trim();
+    if (nombre.length === 0) throw new ConvexError("El nombre es obligatorio");
+    const telefono = args.telefono?.trim() || undefined;
+    const email = args.email?.trim() || undefined;
+    if (!telefono && !email) {
+      throw new ConvexError("Indica al menos un teléfono o un email");
+    }
+    // patch con `undefined` borra el campo opcional (empresa/teléfono/email vaciados).
+    await ctx.db.patch(args.id, {
+      nombre,
+      empresa: args.empresa?.trim() || undefined,
+      telefono,
+      email,
+    });
+    return null;
   },
 });
