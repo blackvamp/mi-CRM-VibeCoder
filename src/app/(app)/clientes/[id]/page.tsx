@@ -1,14 +1,17 @@
 import { guardAuth } from "@/lib/authGuard";
-import { Proximamente } from "@/components/Proximamente";
+import { FichaClienteClient } from "./FichaClienteClient";
 
-// Next.js 16: `params` es asíncrono. La ficha real llega en TAL-11/TAL-14; por
-// ahora es un placeholder para que "tocar un seguimiento" en Hoy no dé 404.
+// Next.js 16: `params` y `searchParams` son asíncronos. `?nuevo=1` lo pone el alta
+// al navegar aquí; se pasa como booleano para el toast "Cliente añadido".
 export default async function FichaClientePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ nuevo?: string }>;
 }) {
   await guardAuth();
-  await params;
-  return <Proximamente titulo="Ficha de cliente" />;
+  const { id } = await params;
+  const sp = await searchParams;
+  return <FichaClienteClient id={id} justCreated={sp.nuevo === "1"} />;
 }

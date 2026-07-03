@@ -1,60 +1,39 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useMutation } from "convex/react";
 import { AlertCircle } from "lucide-react";
 import { api, type Id } from "@/lib/convexApi";
 import { Overlay } from "@/components/ui/Overlay";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
-import { ChipGroup } from "@/components/ui/ChipGroup";
-
-type Canal = "web" | "redes" | "email" | "whatsapp";
-
-const CANALES: { value: Canal; label: string }[] = [
-  { value: "web", label: "Web" },
-  { value: "redes", label: "Redes" },
-  { value: "email", label: "Email" },
-  { value: "whatsapp", label: "WhatsApp" },
-];
 
 interface Props {
-  open: boolean;
+  cliente: {
+    _id: Id<"clientes">;
+    nombre: string;
+    empresa?: string;
+    telefono?: string;
+    email?: string;
+  };
   onClose: () => void;
-  /**
-   * Uso embebido (p. ej. desde "Nueva tarea"): recibe el id del cliente recién
-   * creado para preseleccionarlo. Si se omite, el overlay abre su ficha.
-   */
-  onCreated?: (id: Id<"clientes">) => void;
+  onSaved?: () => void;
 }
 
 /**
- * Alta rápida de cliente (F1). Al guardar: con `onCreated` (uso embebido) devuelve
- * el id sin navegar; sin él (standalone) abre la ficha del cliente `/clientes/{id}`.
+ * Edita los datos de contacto de un cliente (F2). Subconjunto del alta: solo
+ * Nombre/Empresa/Teléfono/Email (sin Canal, Nota ni Estado — el estado es calculado).
+ * Se monta solo al abrir desde la ficha, así el `useState` perezoso precarga los datos
+ * actuales sin sincronizar estado en un efecto (evita `react-hooks/set-state-in-effect`).
  */
-export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
-  const router = useRouter();
-  const crear = useMutation(api.clientes.crear);
-  const [nombre, setNombre] = useState("");
-  const [empresa, setEmpresa] = useState("");
-  const [telefono, setTelefono] = useState("");
-  const [email, setEmail] = useState("");
-  const [canal, setCanal] = useState<Canal | null>(null);
-  const [nota, setNota] = useState("");
+export function EditarClienteOverlay({ cliente, onClose, onSaved }: Props) {
+  const actualizar = useMutation(api.clientes.actualizar);
+  const [nombre, setNombre] = useState(() => cliente.nombre);
+  const [empresa, setEmpresa] = useState(() => cliente.empresa ?? "");
+  const [telefono, setTelefono] = useState(() => cliente.telefono ?? "");
+  const [email, setEmail] = useState(() => cliente.email ?? "");
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
-
-  function reset() {
-    setNombre("");
-    setEmpresa("");
-    setTelefono("");
-    setEmail("");
-    setCanal(null);
-    setNota("");
-    setError(null);
-    setGuardando(false);
-  }
 
   async function guardar() {
     setError(null);
@@ -68,22 +47,15 @@ export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
     }
     setGuardando(true);
     try {
-      const id = await crear({
+      await actualizar({
+        id: cliente._id,
         nombre: nombre.trim(),
         empresa: empresa.trim() || undefined,
         telefono: telefono.trim() || undefined,
         email: email.trim() || undefined,
-        canalOrigen: canal ?? undefined,
-        nota: nota.trim() || undefined,
       });
-      reset();
+      onSaved?.();
       onClose();
-      if (onCreated) {
-        onCreated(id);
-      } else {
-        // ?nuevo=1 dispara el toast "Cliente añadido" al aterrizar en la ficha.
-        router.push(`/clientes/${id}?nuevo=1`);
-      }
     } catch {
       setError("No se pudo guardar. Revisa los datos.");
       setGuardando(false);
@@ -92,16 +64,21 @@ export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
 
   return (
     <Overlay
-      open={open}
+      open
       onClose={onClose}
-      title="Nuevo cliente"
+      title="Editar cliente"
       footer={
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" size="compact" onClick={onClose}>
+          <Button
+            variant="secondary"
+            size="compact"
+            onClick={onClose}
+            disabled={guardando}
+          >
             Cancelar
           </Button>
           <Button size="compact" loading={guardando} onClick={guardar}>
-            Guardar cliente
+            Guardar cambios
           </Button>
         </div>
       }
@@ -140,17 +117,6 @@ export function NuevoClienteOverlay({ open, onClose, onCreated }: Props) {
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-        />
-        <ChipGroup<Canal>
-          label="Canal de origen"
-          options={CANALES}
-          value={canal}
-          onChange={setCanal}
-        />
-        <Input
-          label="Nota"
-          value={nota}
-          onChange={(e) => setNota(e.target.value)}
         />
       </div>
     </Overlay>

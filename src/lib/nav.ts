@@ -2,9 +2,8 @@ import { Home, Users, TrendingUp, Shield } from "lucide-react";
 
 /**
  * Navegación principal (barra inferior en móvil, sidebar en escritorio).
- * "Equipo" solo debe mostrarse a usuarios con rol "propietaria" — el filtrado
- * por rol llega con la autenticación real (TAL-7 / TAL-60), de momento se
- * muestran los 4 accesos siempre.
+ * "Equipo" solo se muestra a usuarios con rol "propietaria"; el filtrado por rol
+ * lo aplica `useNavItems` (ver `useSesion`) según la sesión real.
  */
 export const NAV_ITEMS = [
   { href: "/hoy", label: "Hoy", icon: Home },
@@ -20,3 +19,11 @@ export const SECTION_TITLES: Record<string, string> = {
   "/equipo": "Equipo",
   "/cuenta": "Mi cuenta",
 };
+
+/**
+ * Rutas de detalle "push" (p. ej. la ficha de cliente `/clientes/:id`) que ocultan
+ * la barra inferior. `/clientes` (la lista) NO casa; sí `/clientes/<id>`.
+ */
+export function esFichaCliente(pathname: string): boolean {
+  return /^\/clientes\/[^/]+$/.test(pathname);
+}
