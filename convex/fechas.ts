@@ -32,14 +32,18 @@ const MAX_OFFSET_HORAS = 14;
  * válido porque ya es hoy en Oceanía. Pasado mañana se rechaza siempre. La UI
  * pone `max` en el input (ayuda) y `relativeLabel` nunca etiqueta una fecha
  * futura como "Hoy" (src/lib/utils.ts), así que la holgura no se ve.
+ *
+ * `entidad` va en plural y en el mensaje que lee la persona ("interacciones",
+ * "ventas"): quien llama sabe qué está guardando, esta función no.
  */
-export function assertNoPosteriorAHoyMundial(fecha: string): void {
+export function assertNoPosteriorAHoyMundial(
+  fecha: string,
+  entidad: string,
+): void {
   const limite = new Date(Date.now() + MAX_OFFSET_HORAS * 3_600_000)
     .toISOString()
     .slice(0, 10);
   if (fecha > limite) {
-    throw new ConvexError(
-      "No se pueden registrar interacciones con fecha futura",
-    );
+    throw new ConvexError(`No se pueden registrar ${entidad} con fecha futura`);
   }
 }

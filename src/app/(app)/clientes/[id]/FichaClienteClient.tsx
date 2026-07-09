@@ -16,7 +16,13 @@ import {
 } from "lucide-react";
 import { api, type Id } from "@/lib/convexApi";
 import { ESTADO_BADGE } from "@/lib/estadoCliente";
-import { cn, hoyLocalISO, relativeLabel, shortDate } from "@/lib/utils";
+import {
+  cn,
+  formatMoneda,
+  hoyLocalISO,
+  relativeLabel,
+  shortDate,
+} from "@/lib/utils";
 import { mensajeError } from "@/lib/errores";
 import { etiquetaVencimiento } from "@/lib/seguimientos";
 import {
@@ -24,6 +30,13 @@ import {
   CANAL_INTERACCION_LABEL,
   type CanalInteraccion,
 } from "@/lib/canalInteraccion";
+import {
+  ESTADO_VENTA_BADGE,
+  ESTADO_VENTA_ICONO,
+  ESTADO_VENTA_IMPORTE,
+  ESTADO_VENTA_LABEL,
+  type EstadoVenta,
+} from "@/lib/estadoVenta";
 import { Card } from "@/components/ui/Card";
 import { Badge, STATUS_LABELS } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
@@ -35,6 +48,7 @@ import { Toast } from "@/components/ui/Toast";
 import { EditarClienteOverlay } from "@/components/overlays/EditarClienteOverlay";
 import { ProgramarSeguimientoOverlay } from "@/components/overlays/ProgramarSeguimientoOverlay";
 import { RegistrarInteraccionOverlay } from "@/components/overlays/RegistrarInteraccionOverlay";
+import { RegistrarVentaOverlay } from "@/components/overlays/RegistrarVentaOverlay";
 
 const CANAL_LABEL: Record<string, string> = {
   web: "Web",
@@ -45,7 +59,6 @@ const CANAL_LABEL: Record<string, string> = {
 
 type Accion = "interaccion" | "seguimiento" | "venta";
 
-// "venta" sigue siendo placeholder (TAL-13).
 const ACCIONES: { id: Accion; label: string; icon: typeof MessageSquarePlus }[] =
   [
     { id: "interaccion", label: "Registrar interacción", icon: MessageSquarePlus },
@@ -57,6 +70,7 @@ type Toast = { message: string; action?: { label: string; onClick: () => void } 
 
 type Interaccion = {
   _id: Id<"interacciones">;
+  _creationTime: number;
   fecha: string;
   canal: CanalInteraccion;
   texto: string;
@@ -65,9 +79,20 @@ type Interaccion = {
 
 type SeguimientoHecho = {
   _id: Id<"seguimientos">;
+  _creationTime: number;
   accion: string;
   fecha: string;
   responsableNombre?: string;
+};
+
+type Venta = {
+  _id: Id<"ventas">;
+  _creationTime: number;
+  fecha: string;
+  concepto: string;
+  importe: number;
+  estado: EstadoVenta;
+  autorNombre?: string;
 };
 
 type Pendiente = {
@@ -77,10 +102,11 @@ type Pendiente = {
   responsableNombre?: string;
 };
 
-/** Un item del historial, venga de donde venga. Las ventas llegarán con TAL-13. */
+/** Un item del historial, venga de donde venga. */
 type ItemHistorial =
   | ({ tipo: "interaccion" } & Interaccion)
-  | ({ tipo: "seguimiento" } & SeguimientoHecho);
+  | ({ tipo: "seguimiento" } & SeguimientoHecho)
+  | ({ tipo: "venta" } & Venta);
 
 /** Seguimientos pendientes del cliente (F8), con su chip Atrasado/Pendiente. */
 function SeguimientosPendientes({
@@ -175,63 +201,135 @@ function fechaHistorial(iso: string): string {
   return relativa === dia ? dia : `${relativa} · ${dia}`;
 }
 
-/** Una fila del historial: interacción o seguimiento completado. */
-function ItemHistorialFila({ item }: { item: ItemHistorial }) {
-  const esInteraccion = item.tipo === "interaccion";
-  const Icon = esInteraccion ? CANAL_INTERACCION_ICON[item.canal] : Check;
-  return (
-    <div className="flex items-start gap-3 border-t border-border py-3">
+/** Cómo se pinta cada tipo de item. Un solo sitio donde mirar. */
+function aspectoDe(item: ItemHistorial) {
+  switch (item.tipo) {
+    case "interaccion":
+      return {
+        Icon: CANAL_INTERACCION_ICON[item.canal],
+        circulo: "bg-surface-2 text-text-muted",
+        titulo: CANAL_INTERACCION_LABEL[item.canal],
+        chip: null,
+        detalle: item.texto,
+        pie: item.autorNombre && `Registrado por ${item.autorNombre}`,
+        importe: null,
+      };
+    case "seguimiento":
+      return {
+        Icon: Check,
+        circulo: "bg-primary-subtle text-primary",
+        titulo: item.accion,
+        chip: null,
+        detalle: "Seguimiento completado",
+        pie: item.responsableNombre && `Responsable: ${item.responsableNombre}`,
+        importe: null,
+      };
+    case "venta":
+      return {
+        Icon: TrendingUp,
+        circulo: ESTADO_VENTA_ICONO[item.estado],
+        titulo: item.concepto,
+        chip: (
+          <Badge status={ESTADO_VENTA_BADGE[item.estado]}>
+            {ESTADO_VENTA_LABEL[item.estado]}
+          </Badge>
+        ),
+        detalle: null,
+        pie: item.autorNombre && `Registrado por ${item.autorNombre}`,
+        importe: (
+          <span
+            className={cn(
+              "font-mono text-[14px] font-semibold tabular-nums",
+              ESTADO_VENTA_IMPORTE[item.estado],
+            )}
+          >
+            {formatMoneda(item.importe)}
+          </span>
+        ),
+      };
+  }
+}
+
+/** Una fila del historial: interacción, venta o seguimiento completado. */
+function ItemHistorialFila({
+  item,
+  onEditarVenta,
+}: {
+  item: ItemHistorial;
+  onEditarVenta: (venta: Venta) => void;
+}) {
+  const { Icon, circulo, titulo, chip, detalle, pie, importe } = aspectoDe(item);
+
+  const contenido = (
+    <>
       <span
         className={cn(
           "flex size-[34px] shrink-0 items-center justify-center rounded-full",
-          esInteraccion
-            ? "bg-surface-2 text-text-muted"
-            : "bg-primary-subtle text-primary",
+          circulo,
         )}
       >
         <Icon className="size-[18px]" aria-hidden />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-[15px] font-medium text-text">
-          {esInteraccion ? CANAL_INTERACCION_LABEL[item.canal] : item.accion}
-        </span>
-        <span className="text-[13px] text-text-muted">
-          {esInteraccion ? item.texto : "Seguimiento completado"}
-        </span>
-        {esInteraccion
-          ? item.autorNombre && (
-              <span className="text-[12px] text-text-subtle">
-                Registrado por {item.autorNombre}
-              </span>
-            )
-          : item.responsableNombre && (
-              <span className="text-[12px] text-text-subtle">
-                Responsable: {item.responsableNombre}
-              </span>
-            )}
+      <div className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+        <span className="text-[15px] font-medium text-text">{titulo}</span>
+        {chip}
+        {detalle && (
+          <span className="text-[13px] text-text-muted">{detalle}</span>
+        )}
+        {pie && <span className="text-[12px] text-text-subtle">{pie}</span>}
       </div>
-      <span className="shrink-0 whitespace-nowrap text-[12px] text-text-subtle">
-        {fechaHistorial(item.fecha)}
-      </span>
-    </div>
+      <div className="flex shrink-0 flex-col items-end gap-0.5">
+        {importe}
+        <span className="whitespace-nowrap text-[12px] text-text-subtle">
+          {fechaHistorial(item.fecha)}
+        </span>
+      </div>
+    </>
   );
+
+  const clase = "flex w-full items-start gap-3 border-t border-border py-3";
+
+  // Solo las ventas se editan (TAL-13: pasar una oportunidad a ganada o perdida).
+  if (item.tipo === "venta") {
+    return (
+      <button
+        type="button"
+        onClick={() => onEditarVenta(item)}
+        aria-label={`Editar venta: ${item.concepto}`}
+        className={cn(
+          clase,
+          "cursor-pointer text-left transition-colors hover:bg-surface-2",
+        )}
+      >
+        {contenido}
+      </button>
+    );
+  }
+
+  return <div className={clase}>{contenido}</div>;
 }
 
 /**
- * Historial del cliente (F2), en orden cronológico descendente. Combina
- * interacciones y —si se pide con el check— seguimientos completados. Las ventas
- * se sumarán con TAL-13.
+ * Historial del cliente (F2, TAL-14), en orden cronológico descendente. Combina
+ * interacciones, ventas y —si se pide con el check— seguimientos completados.
+ *
+ * `fecha` no lleva hora, así que dentro de un mismo día desempata `_creationTime`;
+ * sin él, el orden lo decidiría el azar de en qué lista va cada item.
  */
 function Historial({
   interacciones,
+  ventas,
   completados,
   mostrarCompletados,
   onMostrarCompletados,
+  onEditarVenta,
 }: {
   interacciones: { items: Interaccion[]; truncado: boolean } | undefined;
+  ventas: { items: Venta[]; truncado: boolean } | undefined;
   completados: { items: SeguimientoHecho[]; truncado: boolean } | undefined;
   mostrarCompletados: boolean;
   onMostrarCompletados: (v: boolean) => void;
+  onEditarVenta: (venta: Venta) => void;
 }) {
   const check = (
     <Checkbox
@@ -245,6 +343,7 @@ function Historial({
   // ya haría parpadear la lista como si el cliente no tuviera seguimientos.
   const cargando =
     interacciones === undefined ||
+    ventas === undefined ||
     (mostrarCompletados && completados === undefined);
 
   if (cargando) {
@@ -261,13 +360,19 @@ function Historial({
 
   const items: ItemHistorial[] = [
     ...interacciones.items.map((i) => ({ tipo: "interaccion" as const, ...i })),
+    ...ventas.items.map((v) => ({ tipo: "venta" as const, ...v })),
     ...(mostrarCompletados && completados
       ? completados.items.map((s) => ({ tipo: "seguimiento" as const, ...s }))
       : []),
-  ].sort((a, b) => b.fecha.localeCompare(a.fecha));
+  ].sort(
+    (a, b) =>
+      b.fecha.localeCompare(a.fecha) || b._creationTime - a._creationTime,
+  );
 
   const truncado =
-    interacciones.truncado || (mostrarCompletados && !!completados?.truncado);
+    interacciones.truncado ||
+    ventas.truncado ||
+    (mostrarCompletados && !!completados?.truncado);
 
   if (items.length === 0) {
     return (
@@ -275,7 +380,7 @@ function Historial({
         <EmptyState
           icon={<MessageSquare className="size-6" aria-hidden />}
           title="Sin actividad todavía"
-          help="Anota una interacción o programa un seguimiento para empezar el historial."
+          help="Anota una interacción, registra una venta o programa un seguimiento para empezar el historial."
         />
       </Card>
     );
@@ -285,7 +390,11 @@ function Historial({
     <Card title="Historial" action={check}>
       <div className="flex flex-col">
         {items.map((item) => (
-          <ItemHistorialFila key={`${item.tipo}-${item._id}`} item={item} />
+          <ItemHistorialFila
+            key={`${item.tipo}-${item._id}`}
+            item={item}
+            onEditarVenta={onEditarVenta}
+          />
         ))}
       </div>
       {truncado && (
@@ -314,6 +423,10 @@ export function FichaClienteClient({
     api.interacciones.listarPorCliente,
     cliente ? { clienteId: cliente._id } : "skip",
   );
+  const ventas = useQuery(
+    api.ventas.listarPorCliente,
+    cliente ? { clienteId: cliente._id } : "skip",
+  );
   const pendientes = useQuery(
     api.seguimientos.pendientesDeCliente,
     cliente ? { clienteId: cliente._id } : "skip",
@@ -321,6 +434,9 @@ export function FichaClienteClient({
 
   const [editando, setEditando] = useState(false);
   const [accion, setAccion] = useState<Accion | null>(null);
+  // La venta que se está editando. `null` = el overlay de venta, si está abierto,
+  // es un alta. Se limpia siempre al cerrar.
+  const [ventaEditando, setVentaEditando] = useState<Venta | null>(null);
   const [mostrarCompletados, setMostrarCompletados] = useState(false);
   // Con el check apagado ni se pide: el historial no los va a mostrar.
   const completados = useQuery(
@@ -347,6 +463,16 @@ export function FichaClienteClient({
   useEffect(() => {
     if (justCreated) router.replace(`/clientes/${id}`);
   }, [justCreated, id, router]);
+
+  function abrirEdicionVenta(venta: Venta) {
+    setVentaEditando(venta);
+    setAccion("venta");
+  }
+
+  function cerrarVenta() {
+    setAccion(null);
+    setVentaEditando(null);
+  }
 
   async function onHecho(idSeguimiento: Id<"seguimientos">) {
     try {
@@ -479,11 +605,7 @@ export function FichaClienteClient({
                 <button
                   key={a.id}
                   type="button"
-                  onClick={() =>
-                    a.id === "venta"
-                      ? setToast({ message: `${a.label} llega pronto.` })
-                      : setAccion(a.id)
-                  }
+                  onClick={() => setAccion(a.id)}
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-[14px] font-medium text-text transition-colors hover:bg-surface-2"
                 >
                   <span className="flex size-8 items-center justify-center rounded-full bg-primary-subtle text-primary">
@@ -499,9 +621,11 @@ export function FichaClienteClient({
 
           <Historial
             interacciones={historial}
+            ventas={ventas}
             completados={completados}
             mostrarCompletados={mostrarCompletados}
             onMostrarCompletados={setMostrarCompletados}
+            onEditarVenta={abrirEdicionVenta}
           />
 
           <RegistrarInteraccionOverlay
@@ -517,6 +641,25 @@ export function FichaClienteClient({
             clienteId={cliente._id}
             onSaved={() => setToast({ message: "Seguimiento programado" })}
           />
+
+          {/* Montado solo cuando está abierto, y con `key` por venta: el overlay
+              se inicializa una vez, así que si no se remonta reabriría con los
+              datos de la venta anterior. */}
+          {accion === "venta" && (
+            <RegistrarVentaOverlay
+              key={ventaEditando?._id ?? "nueva"}
+              open
+              onClose={cerrarVenta}
+              clienteId={cliente._id}
+              venta={ventaEditando ?? undefined}
+              onSaved={(modo) =>
+                setToast({
+                  message:
+                    modo === "edicion" ? "Venta actualizada" : "Venta registrada",
+                })
+              }
+            />
+          )}
 
           {editando && (
             <EditarClienteOverlay

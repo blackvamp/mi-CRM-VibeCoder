@@ -1,7 +1,7 @@
 import { guardAuth } from "@/lib/authGuard";
-import { Proximamente } from "@/components/Proximamente";
+import { VentasClient } from "./VentasClient";
 
 export default async function VentasPage() {
   await guardAuth();
-  return <Proximamente titulo="Ventas y oportunidades" />;
+  return <VentasClient />;
 }

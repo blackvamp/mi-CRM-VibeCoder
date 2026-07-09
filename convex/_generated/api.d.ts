@@ -17,6 +17,7 @@ import type * as interacciones from "../interacciones.js";
 import type * as seed from "../seed.js";
 import type * as seguimientos from "../seguimientos.js";
 import type * as usuarios from "../usuarios.js";
+import type * as ventas from "../ventas.js";
 
 import type {
   ApiFromModules,
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   seed: typeof seed;
   seguimientos: typeof seguimientos;
   usuarios: typeof usuarios;
+  ventas: typeof ventas;
 }>;
 
 /**

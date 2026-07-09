@@ -97,6 +97,11 @@ export const pendientesDeCliente = query({
  * que vencía hace meses y se completó hoy debe encabezar el historial. De ahí el
  * índice `by_cliente_hecho_fechaHecho` — con el de `vence`, el `take` de abajo lo
  * habría descartado. Se lee uno de más para poder avisar de truncamiento.
+ *
+ * `_creationTime` desempata el historial dentro de un mismo día. Ojo: es cuándo se
+ * CREÓ el seguimiento, no cuándo se completó (no hay timestamp de completado, solo
+ * el día `fechaHecho`), así que uno viejo cerrado hoy cae al final de su día. El
+ * orden es determinista y estable, que es lo que la lista necesita.
  */
 export const completadosDeCliente = query({
   args: { clienteId: v.id("clientes") },
@@ -104,6 +109,7 @@ export const completadosDeCliente = query({
     items: v.array(
       v.object({
         _id: v.id("seguimientos"),
+        _creationTime: v.number(),
         accion: v.string(),
         fecha: v.string(),
         responsableNombre: v.optional(v.string()),
@@ -126,6 +132,7 @@ export const completadosDeCliente = query({
         const responsable = await ctx.db.get(s.responsableId);
         return {
           _id: s._id,
+          _creationTime: s._creationTime,
           accion: s.accion,
           // `hecho: true` siempre trae `fechaHecho`; el fallback es defensivo.
           fecha: s.fechaHecho ?? s.vence,
