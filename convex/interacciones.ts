@@ -32,7 +32,7 @@ export const crear = mutation({
   handler: async (ctx, args) => {
     const usuario = await requireUsuario(ctx);
     assertFechaISO(args.fecha);
-    assertNoPosteriorAHoyMundial(args.fecha);
+    assertNoPosteriorAHoyMundial(args.fecha, "interacciones");
     const texto = args.texto.trim();
     if (texto.length === 0) throw new ConvexError("Escribe qué se ha hablado");
     if (texto.length > MAX_TEXTO) {
@@ -59,6 +59,9 @@ export const crear = mutation({
  * Se leen `HISTORIAL_MAX + 1` para saber si hay más de las que se devuelven, y
  * `truncado` deja que la ficha lo diga en vez de recortar sin avisar.
  *
+ * `_creationTime` viaja al cliente porque `fecha` no lleva hora: es lo que
+ * desempata el historial cuando una interacción y una venta caen el mismo día.
+ *
  * `clienteId` es `v.id` porque llega del doc ya cargado por `clientes.obtener`
  * (fuente confiable), no del segmento de URL.
  */
@@ -68,6 +71,7 @@ export const listarPorCliente = query({
     items: v.array(
       v.object({
         _id: v.id("interacciones"),
+        _creationTime: v.number(),
         fecha: v.string(),
         canal: CANAL_INTERACCION,
         texto: v.string(),
@@ -89,6 +93,7 @@ export const listarPorCliente = query({
         const autor = await ctx.db.get(i.autorId);
         return {
           _id: i._id,
+          _creationTime: i._creationTime,
           fecha: i.fecha,
           canal: i.canal,
           texto: i.texto,

@@ -97,6 +97,8 @@ export default defineSchema({
   ventas: defineTable({
     clienteId: v.id("clientes"),
     concepto: v.string(),
+    // Importe en la moneda del negocio (dólares), con hasta dos decimales. El
+    // backend lo normaliza al guardarlo; las sumas se hacen en centavos.
     importe: v.number(),
     estado: v.union(
       v.literal("abierta"),
@@ -105,7 +107,11 @@ export default defineSchema({
     ),
     fecha: v.string(),
     autorId: v.id("users"),
-  })
-    .index("by_cliente", ["clienteId"])
-    .index("by_estado", ["estado"]),
+    // Compuesto por la misma razón que en `interacciones`: el historial de la
+    // ficha ordena por `fecha` y se trunca con `take`, así que el índice tiene
+    // que ordenar por ese campo o se descartarían filas equivocadas. Sirve
+    // también para consultar solo por `clienteId` (prefijo), que es lo que hace
+    // `estadoDe`. No hay `by_estado`: /ventas necesita los cuatro contadores a
+    // la vez, así que lee la tabla entera una vez y filtra en memoria.
+  }).index("by_cliente_fecha", ["clienteId", "fecha"]),
 });

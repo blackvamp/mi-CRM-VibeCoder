@@ -57,9 +57,24 @@ export function relativeLabel(iso: string, today: Date = new Date()): string {
   return `Hace ${weeks} ${weeks === 1 ? "semana" : "semanas"}`;
 }
 
-/** Formatea un importe en euros con separador de miles por punto: 12400 -> "€12.400". */
-export function formatEuro(n: number): string {
-  return "€" + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+/**
+ * Importe en dólares: 21000 -> "$21,000"; 1200.5 -> "$1,200.50". Los decimales
+ * solo aparecen si los hay, así que un apunte redondo no arrastra un ",00".
+ *
+ * Formateado a mano y no con `Intl`: el resultado tiene que ser idéntico en el
+ * render de servidor y en el del navegador (si no, React avisa de un desajuste
+ * de hidratación), y eso depende de qué datos ICU lleve compilado cada Node.
+ */
+export function formatMoneda(n: number): string {
+  const centavos = Math.round(n * 100);
+  const miles = String(Math.trunc(centavos / 100)).replace(
+    /\B(?=(\d{3})+(?!\d))/g,
+    ",",
+  );
+  const resto = Math.abs(centavos % 100);
+  return resto === 0
+    ? `$${miles}`
+    : `$${miles}.${String(resto).padStart(2, "0")}`;
 }
 
 /** Normaliza un teléfono dejando solo dígitos, para comparar en búsquedas. */

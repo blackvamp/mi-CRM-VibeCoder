@@ -25,7 +25,7 @@ export const CANAL_ORIGEN = v.union(
 export async function estadoDe(ctx: QueryCtx, clienteId: Id<"clientes">) {
   const ventas = await ctx.db
     .query("ventas")
-    .withIndex("by_cliente", (q) => q.eq("clienteId", clienteId))
+    .withIndex("by_cliente_fecha", (q) => q.eq("clienteId", clienteId))
     .collect();
   if (ventas.length === 0) return "nuevo_lead" as const;
   if (ventas.some((x) => x.estado === "abierta")) return "en_negociacion" as const;
