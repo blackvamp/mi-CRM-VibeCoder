@@ -84,8 +84,15 @@ export default defineSchema({
     // Quién marcó el seguimiento como hecho — solo esa persona puede deshacerlo.
     completadoPorId: v.optional(v.id("users")),
   })
-    .index("by_cliente", ["clienteId"])
-    .index("by_hecho_vence", ["hecho", "vence"]),
+    .index("by_hecho_vence", ["hecho", "vence"])
+    // Los pendientes de un cliente se ordenan por cuándo VENCEN, y los completados
+    // por cuándo se HICIERON: son campos distintos, así que hacen falta dos índices.
+    // Con uno solo por `vence`, truncar los completados descartaría un seguimiento
+    // que venció hace meses pero se cerró hoy — justo el que encabeza el historial.
+    // Indexar `fechaHecho` (opcional en el schema) es seguro: `marcarHecho` escribe
+    // `hecho: true` y `fechaHecho` juntos, y `deshacer` los limpia juntos.
+    .index("by_cliente_hecho_vence", ["clienteId", "hecho", "vence"])
+    .index("by_cliente_hecho_fechaHecho", ["clienteId", "hecho", "fechaHecho"]),
 
   ventas: defineTable({
     clienteId: v.id("clientes"),

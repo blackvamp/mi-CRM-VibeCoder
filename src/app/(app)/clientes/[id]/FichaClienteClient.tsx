@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useConvexAuth, useQuery } from "convex/react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
 import {
   CalendarPlus,
+  Check,
   Mail,
   MessageSquare,
   MessageSquarePlus,
@@ -15,7 +16,9 @@ import {
 } from "lucide-react";
 import { api, type Id } from "@/lib/convexApi";
 import { ESTADO_BADGE } from "@/lib/estadoCliente";
-import { relativeLabel, shortDate } from "@/lib/utils";
+import { cn, hoyLocalISO, relativeLabel, shortDate } from "@/lib/utils";
+import { mensajeError } from "@/lib/errores";
+import { etiquetaVencimiento } from "@/lib/seguimientos";
 import {
   CANAL_INTERACCION_ICON,
   CANAL_INTERACCION_LABEL,
@@ -25,10 +28,12 @@ import { Card } from "@/components/ui/Card";
 import { Badge, STATUS_LABELS } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
+import { Checkbox } from "@/components/ui/Checkbox";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Toast } from "@/components/ui/Toast";
 import { EditarClienteOverlay } from "@/components/overlays/EditarClienteOverlay";
+import { ProgramarSeguimientoOverlay } from "@/components/overlays/ProgramarSeguimientoOverlay";
 import { RegistrarInteraccionOverlay } from "@/components/overlays/RegistrarInteraccionOverlay";
 
 const CANAL_LABEL: Record<string, string> = {
@@ -40,13 +45,15 @@ const CANAL_LABEL: Record<string, string> = {
 
 type Accion = "interaccion" | "seguimiento" | "venta";
 
-// "seguimiento" y "venta" siguen siendo placeholders (TAL-15 y TAL-13).
+// "venta" sigue siendo placeholder (TAL-13).
 const ACCIONES: { id: Accion; label: string; icon: typeof MessageSquarePlus }[] =
   [
     { id: "interaccion", label: "Registrar interacción", icon: MessageSquarePlus },
     { id: "seguimiento", label: "Programar seguimiento", icon: CalendarPlus },
     { id: "venta", label: "Registrar venta", icon: TrendingUp },
   ];
+
+type Toast = { message: string; action?: { label: string; onClick: () => void } };
 
 type Interaccion = {
   _id: Id<"interacciones">;
@@ -55,6 +62,108 @@ type Interaccion = {
   texto: string;
   autorNombre?: string;
 };
+
+type SeguimientoHecho = {
+  _id: Id<"seguimientos">;
+  accion: string;
+  fecha: string;
+  responsableNombre?: string;
+};
+
+type Pendiente = {
+  _id: Id<"seguimientos">;
+  accion: string;
+  vence: string;
+  responsableNombre?: string;
+};
+
+/** Un item del historial, venga de donde venga. Las ventas llegarán con TAL-13. */
+type ItemHistorial =
+  | ({ tipo: "interaccion" } & Interaccion)
+  | ({ tipo: "seguimiento" } & SeguimientoHecho);
+
+/** Seguimientos pendientes del cliente (F8), con su chip Atrasado/Pendiente. */
+function SeguimientosPendientes({
+  pendientes,
+  onHecho,
+}: {
+  pendientes: Pendiente[] | undefined;
+  onHecho: (id: Id<"seguimientos">) => void;
+}) {
+  if (pendientes === undefined) {
+    return (
+      <Card title="Seguimientos pendientes">
+        <div className="flex flex-col gap-3">
+          {[0, 1].map((i) => (
+            <Skeleton key={i} width="100%" height={40} />
+          ))}
+        </div>
+      </Card>
+    );
+  }
+
+  if (pendientes.length === 0) {
+    return (
+      <Card title="Seguimientos pendientes">
+        <p className="py-1.5 text-[14px] text-text-muted">
+          Sin seguimientos pendientes.
+        </p>
+      </Card>
+    );
+  }
+
+  const hoy = hoyLocalISO();
+  return (
+    <Card title="Seguimientos pendientes">
+      <div className="flex flex-col">
+        {pendientes.map((p) => {
+          const { texto, atrasado } = etiquetaVencimiento(p.vence, hoy);
+          return (
+            <div key={p._id} className="flex items-center gap-3 py-[11px]">
+              <button
+                type="button"
+                onClick={() => onHecho(p._id)}
+                aria-label={`Marcar como hecho: ${p.accion}`}
+                className="group flex size-6 shrink-0 items-center justify-center rounded-full border-[1.5px] border-border-strong transition-colors hover:border-primary"
+              >
+                <Check className="size-3 text-primary opacity-0 transition-opacity group-hover:opacity-50" />
+              </button>
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-[15px] font-medium text-text">
+                  {p.accion}
+                </span>
+                <span
+                  className={cn(
+                    "text-[13px]",
+                    atrasado ? "text-error-text" : "text-text-muted",
+                  )}
+                >
+                  {texto}
+                </span>
+              </div>
+              {p.responsableNombre && (
+                // Avatar es aria-hidden: el nombre se expone aparte.
+                <span title={p.responsableNombre} className="shrink-0">
+                  <Avatar
+                    name={p.responsableNombre}
+                    variant="neutral"
+                    size={22}
+                  />
+                  <span className="sr-only">
+                    Responsable: {p.responsableNombre}
+                  </span>
+                </span>
+              )}
+              <Badge status={atrasado ? "error" : "warning"} className="shrink-0">
+                {atrasado ? "Atrasado" : "Pendiente"}
+              </Badge>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
 
 /**
  * "Hoy · 8 jul", "Hace 4 semanas · 8 jun". Para una fecha futura `relativeLabel`
@@ -66,16 +175,81 @@ function fechaHistorial(iso: string): string {
   return relativa === dia ? dia : `${relativa} · ${dia}`;
 }
 
-/** Historial del cliente (F2). Hoy solo interacciones; ventas y seguimientos
- *  completados se sumarán con TAL-13 y TAL-15. */
+/** Una fila del historial: interacción o seguimiento completado. */
+function ItemHistorialFila({ item }: { item: ItemHistorial }) {
+  const esInteraccion = item.tipo === "interaccion";
+  const Icon = esInteraccion ? CANAL_INTERACCION_ICON[item.canal] : Check;
+  return (
+    <div className="flex items-start gap-3 border-t border-border py-3">
+      <span
+        className={cn(
+          "flex size-[34px] shrink-0 items-center justify-center rounded-full",
+          esInteraccion
+            ? "bg-surface-2 text-text-muted"
+            : "bg-primary-subtle text-primary",
+        )}
+      >
+        <Icon className="size-[18px]" aria-hidden />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-[15px] font-medium text-text">
+          {esInteraccion ? CANAL_INTERACCION_LABEL[item.canal] : item.accion}
+        </span>
+        <span className="text-[13px] text-text-muted">
+          {esInteraccion ? item.texto : "Seguimiento completado"}
+        </span>
+        {esInteraccion
+          ? item.autorNombre && (
+              <span className="text-[12px] text-text-subtle">
+                Registrado por {item.autorNombre}
+              </span>
+            )
+          : item.responsableNombre && (
+              <span className="text-[12px] text-text-subtle">
+                Responsable: {item.responsableNombre}
+              </span>
+            )}
+      </div>
+      <span className="shrink-0 whitespace-nowrap text-[12px] text-text-subtle">
+        {fechaHistorial(item.fecha)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Historial del cliente (F2), en orden cronológico descendente. Combina
+ * interacciones y —si se pide con el check— seguimientos completados. Las ventas
+ * se sumarán con TAL-13.
+ */
 function Historial({
-  historial,
+  interacciones,
+  completados,
+  mostrarCompletados,
+  onMostrarCompletados,
 }: {
-  historial: { items: Interaccion[]; truncado: boolean } | undefined;
+  interacciones: { items: Interaccion[]; truncado: boolean } | undefined;
+  completados: { items: SeguimientoHecho[]; truncado: boolean } | undefined;
+  mostrarCompletados: boolean;
+  onMostrarCompletados: (v: boolean) => void;
 }) {
-  if (historial === undefined) {
+  const check = (
+    <Checkbox
+      label="Mostrar completados"
+      checked={mostrarCompletados}
+      onChange={(e) => onMostrarCompletados(e.target.checked)}
+    />
+  );
+
+  // Con el check activo, `undefined` es "cargando", no "no hay ninguno": mezclar
+  // ya haría parpadear la lista como si el cliente no tuviera seguimientos.
+  const cargando =
+    interacciones === undefined ||
+    (mostrarCompletados && completados === undefined);
+
+  if (cargando) {
     return (
-      <Card title="Historial">
+      <Card title="Historial" action={check}>
         <div className="flex flex-col gap-3">
           {[0, 1, 2].map((i) => (
             <Skeleton key={i} width="100%" height={44} />
@@ -85,52 +259,38 @@ function Historial({
     );
   }
 
-  if (historial.items.length === 0) {
+  const items: ItemHistorial[] = [
+    ...interacciones.items.map((i) => ({ tipo: "interaccion" as const, ...i })),
+    ...(mostrarCompletados && completados
+      ? completados.items.map((s) => ({ tipo: "seguimiento" as const, ...s }))
+      : []),
+  ].sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+  const truncado =
+    interacciones.truncado || (mostrarCompletados && !!completados?.truncado);
+
+  if (items.length === 0) {
     return (
-      <Card title="Historial" padding="none">
+      <Card title="Historial" action={check} padding="none">
         <EmptyState
           icon={<MessageSquare className="size-6" aria-hidden />}
           title="Sin actividad todavía"
-          help="Anota una interacción para empezar el historial."
+          help="Anota una interacción o programa un seguimiento para empezar el historial."
         />
       </Card>
     );
   }
 
   return (
-    <Card title="Historial">
+    <Card title="Historial" action={check}>
       <div className="flex flex-col">
-        {historial.items.map((i) => {
-          const Icon = CANAL_INTERACCION_ICON[i.canal];
-          return (
-            <div
-              key={i._id}
-              className="flex items-start gap-3 border-t border-border py-3"
-            >
-              <span className="flex size-[34px] shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-muted">
-                <Icon className="size-[18px]" aria-hidden />
-              </span>
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="text-[15px] font-medium text-text">
-                  {CANAL_INTERACCION_LABEL[i.canal]}
-                </span>
-                <span className="text-[13px] text-text-muted">{i.texto}</span>
-                {i.autorNombre && (
-                  <span className="text-[12px] text-text-subtle">
-                    Registrado por {i.autorNombre}
-                  </span>
-                )}
-              </div>
-              <span className="shrink-0 whitespace-nowrap text-[12px] text-text-subtle">
-                {fechaHistorial(i.fecha)}
-              </span>
-            </div>
-          );
-        })}
+        {items.map((item) => (
+          <ItemHistorialFila key={`${item.tipo}-${item._id}`} item={item} />
+        ))}
       </div>
-      {historial.truncado && (
+      {truncado && (
         <p className="border-t border-border pt-3 text-[12px] text-text-subtle">
-          Mostrando las {historial.items.length} más recientes.
+          Mostrando solo la actividad más reciente.
         </p>
       )}
     </Card>
@@ -154,12 +314,26 @@ export function FichaClienteClient({
     api.interacciones.listarPorCliente,
     cliente ? { clienteId: cliente._id } : "skip",
   );
+  const pendientes = useQuery(
+    api.seguimientos.pendientesDeCliente,
+    cliente ? { clienteId: cliente._id } : "skip",
+  );
 
   const [editando, setEditando] = useState(false);
   const [accion, setAccion] = useState<Accion | null>(null);
+  const [mostrarCompletados, setMostrarCompletados] = useState(false);
+  // Con el check apagado ni se pide: el historial no los va a mostrar.
+  const completados = useQuery(
+    api.seguimientos.completadosDeCliente,
+    cliente && mostrarCompletados ? { clienteId: cliente._id } : "skip",
+  );
+
+  const marcarHecho = useMutation(api.seguimientos.marcarHecho);
+  const deshacer = useMutation(api.seguimientos.deshacer);
+
   // Init perezosa: si venimos del alta mostramos el toast desde el estado inicial
   // (no con un setState en efecto, que rompería react-hooks/set-state-in-effect).
-  const [toast, setToast] = useState<{ message: string } | null>(() =>
+  const [toast, setToast] = useState<Toast | null>(() =>
     justCreated ? { message: "Cliente añadido" } : null,
   );
 
@@ -173,6 +347,29 @@ export function FichaClienteClient({
   useEffect(() => {
     if (justCreated) router.replace(`/clientes/${id}`);
   }, [justCreated, id, router]);
+
+  async function onHecho(idSeguimiento: Id<"seguimientos">) {
+    try {
+      await marcarHecho({ id: idSeguimiento, fechaHecho: hoyLocalISO() });
+    } catch (e) {
+      setToast({ message: mensajeError(e, "No se pudo completar.") });
+      return;
+    }
+    setToast({
+      message: "Seguimiento completado",
+      action: {
+        label: "Deshacer",
+        onClick: async () => {
+          setToast(null);
+          try {
+            await deshacer({ id: idSeguimiento });
+          } catch (e) {
+            setToast({ message: mensajeError(e, "No se pudo deshacer.") });
+          }
+        },
+      },
+    });
+  }
 
   return (
     <>
@@ -283,9 +480,9 @@ export function FichaClienteClient({
                   key={a.id}
                   type="button"
                   onClick={() =>
-                    a.id === "interaccion"
-                      ? setAccion("interaccion")
-                      : setToast({ message: `${a.label} llega pronto.` })
+                    a.id === "venta"
+                      ? setToast({ message: `${a.label} llega pronto.` })
+                      : setAccion(a.id)
                   }
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-[14px] font-medium text-text transition-colors hover:bg-surface-2"
                 >
@@ -298,13 +495,27 @@ export function FichaClienteClient({
             })}
           </div>
 
-          <Historial historial={historial} />
+          <SeguimientosPendientes pendientes={pendientes} onHecho={onHecho} />
+
+          <Historial
+            interacciones={historial}
+            completados={completados}
+            mostrarCompletados={mostrarCompletados}
+            onMostrarCompletados={setMostrarCompletados}
+          />
 
           <RegistrarInteraccionOverlay
             open={accion === "interaccion"}
             onClose={() => setAccion(null)}
             clienteId={cliente._id}
             onSaved={() => setToast({ message: "Interacción registrada" })}
+          />
+
+          <ProgramarSeguimientoOverlay
+            open={accion === "seguimiento"}
+            onClose={() => setAccion(null)}
+            clienteId={cliente._id}
+            onSaved={() => setToast({ message: "Seguimiento programado" })}
           />
 
           {editando && (
@@ -323,7 +534,7 @@ export function FichaClienteClient({
         </div>
       )}
 
-      {toast && <Toast message={toast.message} />}
+      {toast && <Toast message={toast.message} action={toast.action} />}
     </>
   );
 }
@@ -358,6 +569,7 @@ function FichaSkeleton() {
           />
         ))}
       </div>
+      <Skeleton width="100%" height={110} radius={12} />
       <Skeleton width="100%" height={180} radius={12} />
     </div>
   );

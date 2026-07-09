@@ -20,9 +20,10 @@ import { Avatar } from "@/components/ui/Avatar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/Button";
 import { Toast } from "@/components/ui/Toast";
-import { NuevaTareaOverlay } from "@/components/overlays/NuevaTareaOverlay";
 import { NuevoClienteOverlay } from "@/components/overlays/NuevoClienteOverlay";
+import { ProgramarSeguimientoOverlay } from "@/components/overlays/ProgramarSeguimientoOverlay";
 import { RegistrarInteraccionOverlay } from "@/components/overlays/RegistrarInteraccionOverlay";
+import { mensajeError } from "@/lib/errores";
 
 type Seguimiento = {
   _id: Id<"seguimientos">;
@@ -159,14 +160,23 @@ export function HoyClient() {
   }, [toast]);
 
   async function onHecho(id: Id<"seguimientos">) {
-    await marcarHecho({ id, fechaHecho: hoyLocalISO() });
+    try {
+      await marcarHecho({ id, fechaHecho: hoyLocalISO() });
+    } catch (e) {
+      setToast({ message: mensajeError(e, "No se pudo completar.") });
+      return;
+    }
     setToast({
       message: "Seguimiento completado",
       action: {
         label: "Deshacer",
         onClick: async () => {
           setToast(null);
-          await deshacer({ id });
+          try {
+            await deshacer({ id });
+          } catch (e) {
+            setToast({ message: mensajeError(e, "No se pudo deshacer.") });
+          }
         },
       },
     });
@@ -306,9 +316,10 @@ export function HoyClient() {
         </div>
       )}
 
-      <NuevaTareaOverlay
+      <ProgramarSeguimientoOverlay
         open={overlay === "tarea"}
         onClose={() => setOverlay(null)}
+        onSaved={() => setToast({ message: "Tarea creada" })}
       />
       <NuevoClienteOverlay
         open={overlay === "cliente"}

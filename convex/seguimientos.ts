@@ -50,6 +50,93 @@ export const pendientesConCliente = query({
   },
 });
 
+/** Techo de lectura del historial, igual que `interacciones.listarPorCliente`. */
+const HISTORIAL_MAX = 100;
+
+/**
+ * Seguimientos pendientes de un cliente, el más urgente primero (F8, ficha).
+ * El índice compuesto ya ordena por `vence`, así que no hay `sort` en memoria.
+ */
+export const pendientesDeCliente = query({
+  args: { clienteId: v.id("clientes") },
+  returns: v.array(
+    v.object({
+      _id: v.id("seguimientos"),
+      accion: v.string(),
+      vence: v.string(),
+      responsableNombre: v.optional(v.string()),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    await requireUsuario(ctx);
+    const pend = await ctx.db
+      .query("seguimientos")
+      .withIndex("by_cliente_hecho_vence", (q) =>
+        q.eq("clienteId", args.clienteId).eq("hecho", false),
+      )
+      .collect();
+    return await Promise.all(
+      pend.map(async (s) => {
+        const responsable = await ctx.db.get(s.responsableId);
+        return {
+          _id: s._id,
+          accion: s.accion,
+          vence: s.vence,
+          responsableNombre: responsable?.name,
+        };
+      }),
+    );
+  },
+});
+
+/**
+ * Seguimientos completados de un cliente, el más reciente primero — para el
+ * historial de la ficha (TAL-14).
+ *
+ * Se ordenan por `fechaHecho` (cuándo se cerraron), NO por `vence`: un seguimiento
+ * que vencía hace meses y se completó hoy debe encabezar el historial. De ahí el
+ * índice `by_cliente_hecho_fechaHecho` — con el de `vence`, el `take` de abajo lo
+ * habría descartado. Se lee uno de más para poder avisar de truncamiento.
+ */
+export const completadosDeCliente = query({
+  args: { clienteId: v.id("clientes") },
+  returns: v.object({
+    items: v.array(
+      v.object({
+        _id: v.id("seguimientos"),
+        accion: v.string(),
+        fecha: v.string(),
+        responsableNombre: v.optional(v.string()),
+      }),
+    ),
+    truncado: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    await requireUsuario(ctx);
+    const leidos = await ctx.db
+      .query("seguimientos")
+      .withIndex("by_cliente_hecho_fechaHecho", (q) =>
+        q.eq("clienteId", args.clienteId).eq("hecho", true),
+      )
+      .order("desc")
+      .take(HISTORIAL_MAX + 1);
+    const truncado = leidos.length > HISTORIAL_MAX;
+    const items = await Promise.all(
+      leidos.slice(0, HISTORIAL_MAX).map(async (s) => {
+        const responsable = await ctx.db.get(s.responsableId);
+        return {
+          _id: s._id,
+          accion: s.accion,
+          // `hecho: true` siempre trae `fechaHecho`; el fallback es defensivo.
+          fecha: s.fechaHecho ?? s.vence,
+          responsableNombre: responsable?.name,
+        };
+      }),
+    );
+    return { items, truncado };
+  },
+});
+
 /** Programa un seguimiento (F8). `responsableId` por defecto = usuario actual. */
 export const crear = mutation({
   args: {
