@@ -6,14 +6,21 @@ import { useConvexAuth, useQuery } from "convex/react";
 import {
   CalendarPlus,
   Mail,
+  MessageSquare,
   MessageSquarePlus,
   Pencil,
   Phone,
   TrendingUp,
   Users,
 } from "lucide-react";
-import { api } from "@/lib/convexApi";
+import { api, type Id } from "@/lib/convexApi";
 import { ESTADO_BADGE } from "@/lib/estadoCliente";
+import { relativeLabel, shortDate } from "@/lib/utils";
+import {
+  CANAL_INTERACCION_ICON,
+  CANAL_INTERACCION_LABEL,
+  type CanalInteraccion,
+} from "@/lib/canalInteraccion";
 import { Card } from "@/components/ui/Card";
 import { Badge, STATUS_LABELS } from "@/components/ui/Badge";
 import { Avatar } from "@/components/ui/Avatar";
@@ -22,6 +29,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Toast } from "@/components/ui/Toast";
 import { EditarClienteOverlay } from "@/components/overlays/EditarClienteOverlay";
+import { RegistrarInteraccionOverlay } from "@/components/overlays/RegistrarInteraccionOverlay";
 
 const CANAL_LABEL: Record<string, string> = {
   web: "Web",
@@ -30,13 +38,104 @@ const CANAL_LABEL: Record<string, string> = {
   whatsapp: "WhatsApp",
 };
 
-// Placeholders de Fase 3/4 (TAL-12 interacción, TAL-13 venta, TAL-15 seguimiento):
-// reservan el espacio; se conectarán en sus tareas.
-const ACCIONES = [
-  { label: "Registrar interacción", icon: MessageSquarePlus },
-  { label: "Programar seguimiento", icon: CalendarPlus },
-  { label: "Registrar venta", icon: TrendingUp },
-];
+type Accion = "interaccion" | "seguimiento" | "venta";
+
+// "seguimiento" y "venta" siguen siendo placeholders (TAL-15 y TAL-13).
+const ACCIONES: { id: Accion; label: string; icon: typeof MessageSquarePlus }[] =
+  [
+    { id: "interaccion", label: "Registrar interacción", icon: MessageSquarePlus },
+    { id: "seguimiento", label: "Programar seguimiento", icon: CalendarPlus },
+    { id: "venta", label: "Registrar venta", icon: TrendingUp },
+  ];
+
+type Interaccion = {
+  _id: Id<"interacciones">;
+  fecha: string;
+  canal: CanalInteraccion;
+  texto: string;
+  autorNombre?: string;
+};
+
+/**
+ * "Hoy · 8 jul", "Hace 4 semanas · 8 jun". Para una fecha futura `relativeLabel`
+ * ya devuelve el día, así que se evita el redundante "9 jul · 9 jul".
+ */
+function fechaHistorial(iso: string): string {
+  const relativa = relativeLabel(iso);
+  const dia = shortDate(iso);
+  return relativa === dia ? dia : `${relativa} · ${dia}`;
+}
+
+/** Historial del cliente (F2). Hoy solo interacciones; ventas y seguimientos
+ *  completados se sumarán con TAL-13 y TAL-15. */
+function Historial({
+  historial,
+}: {
+  historial: { items: Interaccion[]; truncado: boolean } | undefined;
+}) {
+  if (historial === undefined) {
+    return (
+      <Card title="Historial">
+        <div className="flex flex-col gap-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} width="100%" height={44} />
+          ))}
+        </div>
+      </Card>
+    );
+  }
+
+  if (historial.items.length === 0) {
+    return (
+      <Card title="Historial" padding="none">
+        <EmptyState
+          icon={<MessageSquare className="size-6" aria-hidden />}
+          title="Sin actividad todavía"
+          help="Anota una interacción para empezar el historial."
+        />
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Historial">
+      <div className="flex flex-col">
+        {historial.items.map((i) => {
+          const Icon = CANAL_INTERACCION_ICON[i.canal];
+          return (
+            <div
+              key={i._id}
+              className="flex items-start gap-3 border-t border-border py-3"
+            >
+              <span className="flex size-[34px] shrink-0 items-center justify-center rounded-full bg-surface-2 text-text-muted">
+                <Icon className="size-[18px]" aria-hidden />
+              </span>
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <span className="text-[15px] font-medium text-text">
+                  {CANAL_INTERACCION_LABEL[i.canal]}
+                </span>
+                <span className="text-[13px] text-text-muted">{i.texto}</span>
+                {i.autorNombre && (
+                  <span className="text-[12px] text-text-subtle">
+                    Registrado por {i.autorNombre}
+                  </span>
+                )}
+              </div>
+              <span className="shrink-0 whitespace-nowrap text-[12px] text-text-subtle">
+                {fechaHistorial(i.fecha)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {historial.truncado && (
+        <p className="border-t border-border pt-3 text-[12px] text-text-subtle">
+          Mostrando las {historial.items.length} más recientes.
+        </p>
+      )}
+    </Card>
+  );
+}
 
 export function FichaClienteClient({
   id,
@@ -51,8 +150,13 @@ export function FichaClienteClient({
     api.clientes.obtener,
     isAuthenticated ? { id } : "skip",
   );
+  const historial = useQuery(
+    api.interacciones.listarPorCliente,
+    cliente ? { clienteId: cliente._id } : "skip",
+  );
 
   const [editando, setEditando] = useState(false);
+  const [accion, setAccion] = useState<Accion | null>(null);
   // Init perezosa: si venimos del alta mostramos el toast desde el estado inicial
   // (no con un setState en efecto, que rompería react-hooks/set-state-in-effect).
   const [toast, setToast] = useState<{ message: string } | null>(() =>
@@ -176,10 +280,12 @@ export function FichaClienteClient({
               const Icon = a.icon;
               return (
                 <button
-                  key={a.label}
+                  key={a.id}
                   type="button"
                   onClick={() =>
-                    setToast({ message: `${a.label} llega pronto.` })
+                    a.id === "interaccion"
+                      ? setAccion("interaccion")
+                      : setToast({ message: `${a.label} llega pronto.` })
                   }
                   className="flex flex-1 items-center justify-center gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-[14px] font-medium text-text transition-colors hover:bg-surface-2"
                 >
@@ -191,6 +297,15 @@ export function FichaClienteClient({
               );
             })}
           </div>
+
+          <Historial historial={historial} />
+
+          <RegistrarInteraccionOverlay
+            open={accion === "interaccion"}
+            onClose={() => setAccion(null)}
+            clienteId={cliente._id}
+            onSaved={() => setToast({ message: "Interacción registrada" })}
+          />
 
           {editando && (
             <EditarClienteOverlay
@@ -243,6 +358,7 @@ function FichaSkeleton() {
           />
         ))}
       </div>
+      <Skeleton width="100%" height={180} radius={12} />
     </div>
   );
 }

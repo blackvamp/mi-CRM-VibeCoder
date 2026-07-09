@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/Button";
 import { Toast } from "@/components/ui/Toast";
 import { NuevaTareaOverlay } from "@/components/overlays/NuevaTareaOverlay";
 import { NuevoClienteOverlay } from "@/components/overlays/NuevoClienteOverlay";
+import { RegistrarInteraccionOverlay } from "@/components/overlays/RegistrarInteraccionOverlay";
 
 type Seguimiento = {
   _id: Id<"seguimientos">;
@@ -143,7 +144,9 @@ export function HoyClient() {
   const marcarHecho = useMutation(api.seguimientos.marcarHecho);
   const deshacer = useMutation(api.seguimientos.deshacer);
 
-  const [overlay, setOverlay] = useState<"tarea" | "cliente" | null>(null);
+  const [overlay, setOverlay] = useState<
+    "tarea" | "cliente" | "interaccion" | null
+  >(null);
   const [toast, setToast] = useState<{
     message: string;
     action?: { label: string; onClick: () => void };
@@ -195,8 +198,7 @@ export function HoyClient() {
       label: "Anotar interacción",
       icon: MessageSquarePlus,
       destacado: false,
-      onClick: () =>
-        setToast({ message: "Registrar interacción llega pronto." }),
+      onClick: () => setOverlay("interaccion"),
     },
     {
       label: "Registrar venta",
@@ -311,6 +313,11 @@ export function HoyClient() {
       <NuevoClienteOverlay
         open={overlay === "cliente"}
         onClose={() => setOverlay(null)}
+      />
+      <RegistrarInteraccionOverlay
+        open={overlay === "interaccion"}
+        onClose={() => setOverlay(null)}
+        onSaved={() => setToast({ message: "Interacción registrada" })}
       />
 
       {toast && <Toast message={toast.message} action={toast.action} />}

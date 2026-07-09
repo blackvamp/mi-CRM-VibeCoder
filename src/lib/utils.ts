@@ -39,12 +39,18 @@ export function hoyLocalISO(d: Date = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
-/** "Hoy" / "Ayer" / "Hace N días" / "Hace N semanas" respecto a una fecha de referencia. */
+/**
+ * "Hoy" / "Ayer" / "Hace N días" / "Hace N semanas" respecto a una fecha de referencia.
+ * Una fecha futura NO es "Hoy": se muestra su día ("9 jul"). El backend admite un día
+ * de holgura por husos horarios (convex/fechas.ts), y sin esto la lista de clientes
+ * enseñaría como "Hoy" un último contacto de mañana.
+ */
 export function relativeLabel(iso: string, today: Date = new Date()): string {
   const ref = new Date(hoyLocalISO(today) + "T00:00:00");
   const target = new Date(iso + "T00:00:00");
   const days = Math.round((ref.getTime() - target.getTime()) / 86_400_000);
-  if (days <= 0) return "Hoy";
+  if (days < 0) return shortDate(iso);
+  if (days === 0) return "Hoy";
   if (days === 1) return "Ayer";
   if (days < 7) return `Hace ${days} días`;
   const weeks = Math.round(days / 7);

@@ -10,6 +10,12 @@ interface OverlayProps {
   title: string;
   children: ReactNode;
   footer?: ReactNode;
+  /**
+   * Elemento que recibe el foco al abrir. Por defecto, el primer focusable del
+   * panel — que por orden del DOM es el botón "Cerrar", así que un `autoFocus`
+   * en un campo NO basta: React lo aplica al montar y el foco inicial lo pisa.
+   */
+  initialFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 const FOCUSABLE =
@@ -20,7 +26,14 @@ const FOCUSABLE =
  * Cierra por botón, scrim o Esc; atrapa el foco (Tab/Shift+Tab cicla) y bloquea
  * el scroll de fondo. `role="dialog"` + `aria-modal`.
  */
-export function Overlay({ open, onClose, title, children, footer }: OverlayProps) {
+export function Overlay({
+  open,
+  onClose,
+  title,
+  children,
+  footer,
+  initialFocusRef,
+}: OverlayProps) {
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -52,7 +65,9 @@ export function Overlay({ open, onClose, title, children, footer }: OverlayProps
 
     document.addEventListener("keydown", onKey);
     const focusTimer = setTimeout(() => {
-      panel?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
+      const destino =
+        initialFocusRef?.current ?? panel?.querySelector<HTMLElement>(FOCUSABLE);
+      destino?.focus();
     }, 20);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -62,7 +77,7 @@ export function Overlay({ open, onClose, title, children, footer }: OverlayProps
       clearTimeout(focusTimer);
       document.body.style.overflow = prevOverflow;
     };
-  }, [open, onClose]);
+  }, [open, onClose, initialFocusRef]);
 
   if (!open) return null;
 

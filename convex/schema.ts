@@ -70,7 +70,9 @@ export default defineSchema({
     ),
     texto: v.string(),
     autorId: v.id("users"),
-  }).index("by_cliente", ["clienteId"]),
+    // Compuesto: `order("desc")` sobre él da el historial ya ordenado por fecha
+    // y, en empates del mismo día (fecha no lleva hora), por _creationTime.
+  }).index("by_cliente_fecha", ["clienteId", "fecha"]),
 
   seguimientos: defineTable({
     clienteId: v.id("clientes"),
