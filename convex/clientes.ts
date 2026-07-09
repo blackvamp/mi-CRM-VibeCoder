@@ -48,14 +48,12 @@ export const listar = query({
  * Lista de clientes con estado calculado y "último contacto", para /clientes (F3).
  *
  * Escala MVP: `collect()` de toda la tabla + enriquecido N+1 por cliente (`estadoDe`
- * colecta ventas; se colectan interacciones por cliente). Aceptable para decenas de
- * clientes; a cientos/miles habría que paginar o mover la búsqueda al servidor — NO
- * dejar este patrón como implícito si el volumen crece.
+ * colecta ventas). Aceptable para decenas de clientes; a cientos/miles habría que
+ * paginar o mover la búsqueda al servidor — NO dejar este patrón como implícito si
+ * el volumen crece.
  *
- * "Último contacto" = max de `fecha` (ISO, comparación lexicográfica) por collect+reduce.
- * Hoy la tabla `interacciones` está vacía (el registro llega en TAL-12) → devuelve null.
- * Optimización futura: `interacciones.by_cliente` no ordena por fecha; para el "más
- * reciente" eficiente con datos reales, añadir índice compuesto ["clienteId","fecha"].
+ * "Último contacto" = la interacción más reciente, leída del índice compuesto
+ * `by_cliente_fecha` en orden descendente (una sola fila, sin collect+reduce).
  */
 export const listarConEstado = query({
   args: {},
@@ -76,17 +74,12 @@ export const listarConEstado = query({
     const filas = await Promise.all(
       clientes.map(async (c) => {
         const estado = await estadoDe(ctx, c._id);
-        const interacciones = await ctx.db
+        const ultima = await ctx.db
           .query("interacciones")
-          .withIndex("by_cliente", (q) => q.eq("clienteId", c._id))
-          .collect();
-        const ultimoContacto =
-          interacciones.length === 0
-            ? null
-            : interacciones.reduce(
-                (max, i) => (i.fecha > max ? i.fecha : max),
-                interacciones[0].fecha,
-              );
+          .withIndex("by_cliente_fecha", (q) => q.eq("clienteId", c._id))
+          .order("desc")
+          .first();
+        const ultimoContacto = ultima?.fecha ?? null;
         return {
           _id: c._id,
           nombre: c.nombre,

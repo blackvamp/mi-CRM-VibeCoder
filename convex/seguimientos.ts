@@ -2,8 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUsuario } from "./authz";
 import { estadoDe, ESTADO_CLIENTE } from "./clientes";
-
-const ISO = /^\d{4}-\d{2}-\d{2}$/;
+import { assertFechaISO } from "./fechas";
 
 /**
  * Todos los seguimientos pendientes del negocio, con datos del cliente y del
@@ -64,7 +63,8 @@ export const crear = mutation({
     const usuario = await requireUsuario(ctx);
     const accion = args.accion.trim();
     if (accion.length === 0) throw new ConvexError("Indica qué hay que hacer");
-    if (!ISO.test(args.vence)) throw new ConvexError("Fecha inválida");
+    // Sin cota superior: un seguimiento se programa hacia el futuro.
+    assertFechaISO(args.vence);
     const cliente = await ctx.db.get(args.clienteId);
     if (cliente === null) throw new ConvexError("Cliente no encontrado");
     const responsableId = args.responsableId ?? usuario._id;
@@ -91,7 +91,7 @@ export const marcarHecho = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const usuario = await requireUsuario(ctx);
-    if (!ISO.test(args.fechaHecho)) throw new ConvexError("Fecha inválida");
+    assertFechaISO(args.fechaHecho);
     const s = await ctx.db.get(args.id);
     if (s === null) throw new ConvexError("Seguimiento no encontrado");
     await ctx.db.patch(args.id, {

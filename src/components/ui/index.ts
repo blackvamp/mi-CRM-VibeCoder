@@ -9,3 +9,4 @@ export * from "./ListRow";
 export * from "./Metric";
 export * from "./Skeleton";
 export * from "./TabBar";
+export * from "./Textarea";
