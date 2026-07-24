@@ -40,6 +40,19 @@ export default defineSchema({
     rol: v.optional(v.union(v.literal("propietaria"), v.literal("comercial"))),
   }).index("email", ["email"]),
 
+  // Cuota de solicitudes de recuperación de contraseña (TAL-65). Los CÓDIGOS no
+  // viven aquí: los guarda `authVerificationCodes` de authTables, hasheados.
+  // Esta tabla solo cuenta cuántas veces se ha pedido un código por correo, para
+  // que nadie pueda usar la pantalla de login como ametralladora de correos
+  // contra un buzón ajeno (la librería no limita la PETICIÓN, solo la
+  // verificación). Se escribe únicamente desde internalMutation.
+  intentosRecuperacion: defineTable({
+    email: v.string(),
+    momento: v.number(),
+    // Compuesto: permite leer solo la ventana de la última hora de un correo en
+    // vez de todo su histórico.
+  }).index("by_email_momento", ["email", "momento"]),
+
   clientes: defineTable({
     nombre: v.string(),
     empresa: v.optional(v.string()),

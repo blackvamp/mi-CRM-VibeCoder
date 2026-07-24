@@ -4,6 +4,7 @@ import Google from "@auth/core/providers/google";
 import { ConvexError } from "convex/values";
 import type { DataModel } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { CodigoRecuperacion } from "./codigoRecuperacion";
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
@@ -11,11 +12,56 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // Perfil PÚBLICO del signUp: solo email/name, NUNCA rol. Así una llamada
       // maliciosa a signIn("password", { flow: "signUp" }) no puede autoasignarse
       // un rol; el único profile con rol lo produce el seed (createAccount).
+      //
+      // El correo se normaliza AQUÍ porque este es el punto único desde el que
+      // la librería lo lee: los cuatro flujos (signUp, signIn, reset y
+      // reset-verification) localizan la cuenta con el `email` que devuelve este
+      // profile. Sin esta normalización, escribir " Admin@X.com " en la pantalla
+      // de recuperación no encontraría la cuenta y la persona esperaría un
+      // correo que nunca sale.
       profile(params) {
+        // `auth:signIn` es una action PÚBLICA y acepta flow:"reset" viniendo de
+        // cualquiera, así que sin esta comprobación el envoltorio
+        // `recuperacion.solicitarCodigo` (cuota + respuesta neutra) sería
+        // saltable llamando a la acción de debajo: se podrían pedir códigos sin
+        // límite, distinguir qué correos existen e invalidar sin parar el código
+        // de quien está intentando recuperar su cuenta.
+        //
+        // La prueba es un secreto que solo vive en el entorno del deployment:
+        // `solicitarCodigo` lo añade desde el servidor y el navegador no puede
+        // conocerlo. Se comprueba AQUÍ porque `profile()` corre al principio de
+        // `authorize`, antes de buscar la cuenta, de crear el código y de tocar
+        // Resend; y se lanza igual para cualquier correo, así que tampoco este
+        // camino sirve para averiguar quién está dado de alta.
+        //
+        // Solo afecta a "reset": "reset-verification" tiene que seguir siendo
+        // invocable desde el cliente para poder canjear el código.
+        if (params.flow === "reset") {
+          const esperado = process.env.RECUPERACION_SECRETO;
+          // Fail-closed: sin la variable configurada no se emite ningún código.
+          if (esperado === undefined || params.secretoInterno !== esperado) {
+            throw new Error("Invalid request");
+          }
+        }
         return {
-          email: params.email as string,
+          email: (params.email as string).trim().toLowerCase(),
           name: (params.name as string | undefined) || undefined,
         };
+      },
+      // Código de un solo uso para recuperar la contraseña (TAL-65). Va SOLO
+      // aquí: si además se registrara en `providers[]`, el código valdría como
+      // login sin contraseña y no invalidaría las sesiones abiertas.
+      reset: CodigoRecuperacion,
+      // Mismo umbral que el validador por defecto de la librería (8), pero con
+      // ConvexError y texto en español para que `mensajeError` lo muestre tal
+      // cual en vez de caer en el mensaje genérico. Se ejecuta ANTES de
+      // verificar el código, así que una contraseña corta no lo consume.
+      validatePasswordRequirements: (password: string) => {
+        if (password.length < 8) {
+          throw new ConvexError(
+            "La contraseña debe tener al menos 8 caracteres.",
+          );
+        }
       },
     }),
     Google({
@@ -30,8 +76,13 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
     //
     // Nota: con el proveedor Password, el sign-in normal NO pasa por este
     // callback (solo se invoca al CREAR cuenta: signUp público o createAccount).
-    // Por eso el branch `existingUserId` casi nunca se ejerce con Password; se
-    // mantiene por corrección (account linking).
+    //
+    // El branch `existingUserId` SÍ se ejerce: la recuperación de contraseña
+    // (TAL-65) entra por aquí DOS veces —al crear el código y al verificarlo—
+    // siempre con `existingUserId` distinto de null. El return temprano es lo
+    // que deja `rol` y `name` intactos durante el reset: quitarlo rompería la
+    // recuperación en silencio (el usuario perdería su rol y `requireUsuario`
+    // empezaría a rechazarlo).
     async createOrUpdateUser(ctx, args) {
       if (args.existingUserId !== null) {
         return args.existingUserId;
