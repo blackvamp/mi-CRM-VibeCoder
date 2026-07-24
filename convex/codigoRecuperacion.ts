@@ -135,20 +135,29 @@ export const CodigoRecuperacion = Email({
 
     // Se manda `token` y jamás la `url` que la librería construye con el código
     // como query param: acabaría en el historial y en la cabecera Referer.
-    const respuesta = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: REMITENTE,
-        to: [email],
-        subject: `${conGuion(token)} es tu código de Vibe CRM`,
-        text: textoPlano(token),
-        html: cuerpoHtml(token),
-      }),
-    });
+    let respuesta: Response;
+    try {
+      respuesta = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: REMITENTE,
+          to: [email],
+          subject: `${conGuion(token)} es tu código de Vibe CRM`,
+          text: textoPlano(token),
+          html: cuerpoHtml(token),
+        }),
+      });
+    } catch {
+      // Timeout, DNS o red: `fetch` lanza un TypeError, que no es ConvexError y
+      // por tanto `solicitarCodigo` lo confundiría con "no hay cuenta" y no
+      // liberaría la reserva. Se reetiqueta como fallo de entrega.
+      console.error("Resend: no se pudo conectar");
+      throw new ConvexError("Resend no aceptó el envío");
+    }
 
     if (!respuesta.ok) {
       // Solo el código de estado: el cuerpo puede traer el correo de destino y

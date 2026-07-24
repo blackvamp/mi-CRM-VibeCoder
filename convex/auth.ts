@@ -20,6 +20,29 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // de recuperación no encontraría la cuenta y la persona esperaría un
       // correo que nunca sale.
       profile(params) {
+        // `auth:signIn` es una action PÚBLICA y acepta flow:"reset" viniendo de
+        // cualquiera, así que sin esta comprobación el envoltorio
+        // `recuperacion.solicitarCodigo` (cuota + respuesta neutra) sería
+        // saltable llamando a la acción de debajo: se podrían pedir códigos sin
+        // límite, distinguir qué correos existen e invalidar sin parar el código
+        // de quien está intentando recuperar su cuenta.
+        //
+        // La prueba es un secreto que solo vive en el entorno del deployment:
+        // `solicitarCodigo` lo añade desde el servidor y el navegador no puede
+        // conocerlo. Se comprueba AQUÍ porque `profile()` corre al principio de
+        // `authorize`, antes de buscar la cuenta, de crear el código y de tocar
+        // Resend; y se lanza igual para cualquier correo, así que tampoco este
+        // camino sirve para averiguar quién está dado de alta.
+        //
+        // Solo afecta a "reset": "reset-verification" tiene que seguir siendo
+        // invocable desde el cliente para poder canjear el código.
+        if (params.flow === "reset") {
+          const esperado = process.env.RECUPERACION_SECRETO;
+          // Fail-closed: sin la variable configurada no se emite ningún código.
+          if (esperado === undefined || params.secretoInterno !== esperado) {
+            throw new Error("Invalid request");
+          }
+        }
         return {
           email: (params.email as string).trim().toLowerCase(),
           name: (params.name as string | undefined) || undefined,

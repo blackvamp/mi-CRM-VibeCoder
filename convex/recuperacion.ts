@@ -130,22 +130,36 @@ export const solicitarCodigo = action({
     try {
       await ctx.runAction(api.auth.signIn, {
         provider: "password",
-        params: { email, flow: "reset" },
+        params: {
+          email,
+          flow: "reset",
+          // Prueba de que la solicitud viene de aquí y no de una llamada suelta
+          // a la action pública `auth:signIn`. La comprueba `Password.profile()`
+          // en convex/auth.ts; el navegador no conoce este valor.
+          secretoInterno: process.env.RECUPERACION_SECRETO,
+        },
       });
     } catch (error) {
       if (error instanceof ConvexError) {
         // Falló el envío (lo marca codigoRecuperacion.ts). El código ya se creó,
         // así que se suelta la reserva para no gastarle la cuota a quien no ha
         // recibido nada. Sin el correo en el log: es compartido.
-        await ctx.runMutation(internal.recuperacion.liberarEnvio, {
-          reservaId,
-        });
+        //
+        // La liberación es best-effort: si fallara, no puede convertirse en una
+        // excepción hacia fuera, porque solo se llega hasta aquí cuando la
+        // cuenta existe y eso volvería a delatarla.
+        try {
+          await ctx.runMutation(internal.recuperacion.liberarEnvio, {
+            reservaId,
+          });
+        } catch {
+          console.error("recuperacion: no se pudo liberar la reserva");
+        }
         console.error("recuperacion: no se pudo enviar el código");
-      } else {
-        // No hay cuenta de contraseña para ese correo (no existe, o solo entra
-        // con Google). Se traga en silencio y sin identificarlo.
-        console.info("recuperacion: solicitud sin cuenta de contraseña");
       }
+      // Cualquier otro error (no hay cuenta de contraseña para ese correo, o la
+      // llamada no traía la prueba interna) se traga sin dejar rastro: es una
+      // ruta pública y registrar cada intento permitiría inundar los logs.
     }
     return null;
   },
