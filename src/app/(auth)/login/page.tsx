@@ -1,18 +1,56 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthActions } from "@convex-dev/auth/react";
+import { useConvexAuth } from "convex/react";
 import { AlertCircle, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 
+// Mensaje deliberadamente genérico: Convex Auth no propaga a través del
+// redirect el motivo exacto del fallo (evita filtrar si un email existe o
+// no), así que no distinguimos "cuenta no autorizada" de "cancelaste en
+// Google" ni de un error del proveedor.
+const ERROR_GOOGLE = "No se pudo iniciar sesión con Google.";
+
 export default function LoginPage() {
   const { signIn } = useAuthActions();
+  const { isAuthenticated } = useConvexAuth();
   const router = useRouter();
   const [showPass, setShowPass] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [submittingGoogle, setSubmittingGoogle] = useState(false);
+  // `signIn("google")` solo abre el redirect a Google; el resultado (éxito o
+  // rechazo de createOrUpdateUser) llega en la carga de página siguiente, no
+  // como una excepción capturable en onGoogleClick. Se detecta leyendo el
+  // marcador propio de la URL en el primer render: si vino `code`, es un
+  // regreso exitoso (el `code` se consume aparte y dispara el redirect de
+  // abajo); si no, fue un rechazo.
+  const [error, setError] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    const params = new URLSearchParams(window.location.search);
+    return params.get("intento") === "google" && !params.has("code")
+      ? ERROR_GOOGLE
+      : null;
+  });
+
+  // Sesión iniciada (login por contraseña o regreso exitoso de Google) → a /hoy.
+  useEffect(() => {
+    if (isAuthenticated) {
+      router.replace("/hoy");
+    }
+  }, [isAuthenticated, router]);
+
+  // Limpieza de la URL: quitar el marcador `intento` una vez leído, para que
+  // recargar /login no vuelva a mostrar un intento anterior como error actual.
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("intento")) {
+      url.searchParams.delete("intento");
+      window.history.replaceState({}, "", url.pathname + url.search);
+    }
+  }, []);
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -27,6 +65,17 @@ export default function LoginPage() {
     } catch {
       setError("Correo o contraseña incorrectos.");
       setSubmitting(false);
+    }
+  }
+
+  async function onGoogleClick() {
+    setError(null);
+    setSubmittingGoogle(true);
+    try {
+      await signIn("google", { redirectTo: "/login?intento=google" });
+    } catch {
+      setError(ERROR_GOOGLE);
+      setSubmittingGoogle(false);
     }
   }
 
@@ -106,6 +155,22 @@ export default function LoginPage() {
               ¿Olvidaste tu contraseña?
             </button>
           </form>
+
+          <div className="my-4 flex items-center gap-3">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-[12px] text-text-subtle">o</span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={onGoogleClick}
+            loading={submittingGoogle}
+            className="w-full"
+          >
+            Entrar con Google
+          </Button>
         </div>
       </div>
     </main>

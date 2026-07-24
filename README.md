@@ -24,7 +24,7 @@ El registro público está cerrado a propósito. Los usuarios se crean con una f
 npx convex run seed:sembrarUsuarios '{"martaPassword":"<pass>","carlosPassword":"<pass>"}'
 ```
 
-Crea `marta@vibecrm.local` (dueña) y `carlos@vibecrm.local` (comercial). Luego entra en `/login`.
+Crea `admin@talent-network.org` (dueña) y `carlos@vibecrm.local` (comercial). Luego entra en `/login` con contraseña, o con Google si ese email ya está provisionado.
 
 ## Estructura
 
@@ -39,7 +39,7 @@ src/lib/           Utilidades (fechas locales, api de Convex, guard de auth, nav
 
 ## Seguridad / auth (resumen)
 
-- **Convex Auth** con proveedor Password. La tabla `users` lleva `rol` (`propietaria` | `comercial`).
+- **Convex Auth** con proveedores Password y Google. Google solo enlaza por email a un usuario ya provisionado (con `rol`); nunca crea cuentas. La tabla `users` lleva `rol` (`propietaria` | `comercial`).
 - Defensa en capas: `src/proxy.ts` (redirección optimista) + `guardAuth()` server-side por página + `requireUsuario()` en cada función Convex (exige sesión y rol válido). El registro público no puede autoasignarse rol.
 - `/equipo` comprueba el rol server-side (solo la dueña).
 
@@ -58,6 +58,15 @@ npx @convex-dev/auth --prod --web-server-url https://<tu-dominio-railway>
 ```
 
 Esto fija `SITE_URL`, `JWT_PRIVATE_KEY` y `JWKS` en producción. `SITE_URL` debe ser el dominio público (el de Railway).
+
+Para que el login con Google funcione en ese deployment, además hace falta:
+
+```bash
+npx convex env set AUTH_GOOGLE_ID <client-id>
+npx convex env set AUTH_GOOGLE_SECRET <client-secret>
+```
+
+La redirect URI que hay que dar de alta en Google es `<dominio-.convex.site del deployment>/api/auth/callback/google`.
 
 ### Frontend — Railway (publicación automática desde GitHub)
 
