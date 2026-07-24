@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth } from "convex/react";
 import { AlertCircle, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { RecuperarContrasena } from "./RecuperarContrasena";
 
 // Mensaje deliberadamente genérico: Convex Auth no propaga a través del
 // redirect el motivo exacto del fallo (evita filtrar si un email existe o
@@ -21,6 +22,14 @@ export default function LoginPage() {
   const [showPass, setShowPass] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submittingGoogle, setSubmittingGoogle] = useState(false);
+  // Modo recuperación: se renderiza en LUGAR del formulario de acceso, no junto
+  // a él. El enlace que lo activa vive dentro de ese <form>, así que mostrar los
+  // dos a la vez anidaría formularios.
+  const [modo, setModo] = useState<"login" | "recuperar">("login");
+  // El correo ya escrito se copia al pasar a recuperación para no obligar a
+  // teclearlo otra vez. Se lee en el clic porque después el input se desmonta.
+  const emailRef = useRef<HTMLInputElement>(null);
+  const [emailRecuperacion, setEmailRecuperacion] = useState("");
   // `signIn("google")` solo abre el redirect a Google; el resultado (éxito o
   // rechazo de createOrUpdateUser) llega en la carga de página siguiente, no
   // como una excepción capturable en onGoogleClick. Se detecta leyendo el
@@ -90,6 +99,13 @@ export default function LoginPage() {
         </div>
 
         <div className="rounded-xl border border-border bg-surface p-6 shadow-sm">
+          {modo === "recuperar" ? (
+            <RecuperarContrasena
+              emailInicial={emailRecuperacion}
+              onCancelar={() => setModo("login")}
+            />
+          ) : (
+            <>
           <h1 className="text-xl font-semibold text-text">Inicia sesión</h1>
           <p className="mt-1 text-sm text-text-muted">
             Entra para ver tus tareas del día.
@@ -114,6 +130,7 @@ export default function LoginPage() {
               autoFocus
               required
               placeholder="tu@correo.com"
+              ref={emailRef}
             />
 
             <div className="relative">
@@ -147,9 +164,11 @@ export default function LoginPage() {
 
             <button
               type="button"
-              onClick={() =>
-                setError("La recuperación de contraseña llegará pronto.")
-              }
+              onClick={() => {
+                setError(null);
+                setEmailRecuperacion(emailRef.current?.value ?? "");
+                setModo("recuperar");
+              }}
               className="text-center text-[13px] text-text-muted hover:text-text"
             >
               ¿Olvidaste tu contraseña?
@@ -171,6 +190,8 @@ export default function LoginPage() {
           >
             Entrar con Google
           </Button>
+            </>
+          )}
         </div>
       </div>
     </main>
