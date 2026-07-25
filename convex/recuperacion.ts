@@ -18,6 +18,15 @@ import type { Id } from "./_generated/dataModel";
  * 2. CUOTA. La librería solo limita la VERIFICACIÓN de códigos, no su
  *    petición. Sin freno, cualquiera puede lanzar cientos de correos contra un
  *    buzón ajeno desde vibe-crm.net y quemar la reputación del dominio.
+ *
+ * Lo que esta cuota NO resuelve (riesgo aceptado, TAL-67): al ser por correo y
+ * al ser esta acción anónima por diseño, un tercero puede consumir los tres
+ * intentos de la dirección de otra persona y dejarla sin poder pedir su código
+ * durante esa hora; además, cada emisión nueva invalida el código anterior.
+ * Subir el número no ayuda —el atacante puede consumirlos todos igual—; haría
+ * falta una señal de identidad (IP o captcha) que aquí no existe. Mientras
+ * tanto, la salida es entrar con la contraseña o con Google, o pedir a la dueña
+ * que ejecute `soporte:desbloquearAcceso`.
  */
 
 const SEGUNDOS_ESPERA = 60;
@@ -113,6 +122,18 @@ export const solicitarCodigo = action({
   handler: async (ctx, args): Promise<null> => {
     const email = args.email.trim().toLowerCase();
     if (email === "") {
+      return null;
+    }
+
+    // Sin el secreto configurado, `Password.profile()` rechaza el flujo "reset"
+    // y NO se emite ningún código. Se comprueba aquí, antes de reservar cuota,
+    // para que quede un rastro claro en los logs: el error de ese rechazo cae
+    // en el catch mudo de más abajo, así que sin esta línea la recuperación
+    // fallaría en silencio para siempre y la persona seguiría viendo "te
+    // llegará un código". No depende de la cuenta consultada, así que no
+    // reabre la enumeración.
+    if (process.env.RECUPERACION_SECRETO === undefined) {
+      console.error("recuperacion: falta RECUPERACION_SECRETO");
       return null;
     }
 

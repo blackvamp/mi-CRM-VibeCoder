@@ -132,7 +132,16 @@ export function RecuperarContrasena({
     setEnviando(true);
     try {
       await signIn("password", {
-        email: emailEnviado,
+        // `correo` y no `email` a propósito (TAL-66). La librería usa el campo
+        // `email` de esta llamada como clave de su límite de intentos, y ese
+        // límite lo puede gastar cualquiera: bastaban diez llamadas anónimas con
+        // la dirección de otra persona para dejarla sin poder canjear su código
+        // durante una hora, indefinidamente. Con otro nombre, la librería no
+        // encuentra clave y no aplica el límite a quien viene por aquí.
+        //
+        // El backend (`Password.profile()` y `CodigoRecuperacion.authorize`) lee
+        // `email ?? correo`, así que sigue localizando la cuenta igual.
+        correo: emailEnviado,
         code: codigo,
         newPassword: nueva,
         flow: "reset-verification",

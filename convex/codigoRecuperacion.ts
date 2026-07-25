@@ -1,5 +1,5 @@
 import { Email } from "@convex-dev/auth/providers/Email";
-import { ConvexError } from "convex/values";
+import { enviarCorreo, REMITENTE } from "./correo";
 
 /**
  * Proveedor del código de un solo uso para recuperar la contraseña (TAL-65).
@@ -12,7 +12,6 @@ import { ConvexError } from "convex/values";
  * ciclo rompe la inferencia de tipos de Convex.
  */
 
-const REMITENTE = "Vibe CRM <no-reply@vibe-crm.net>";
 const MINUTOS_VALIDEZ = 10;
 
 // Crockford Base32: sin I, L, O ni U, para que nadie confunda un 1 con una I ni
@@ -30,6 +29,12 @@ const LARGO_CODIGO = 8;
  * el código sin consumir), así que un atacante puede probar sin límite y
  * distinguir acierto de fallo. Con 6 dígitos eso se agota en horas; con 40 bits
  * de entropía deja de ser viable.
+ *
+ * Dicho de otro modo, y conviene tenerlo presente antes de tocar nada de aquí:
+ * el canje del código NO está protegido por ningún límite de intentos. Sus
+ * únicas defensas son estos 40 bits y los 10 minutos de validez. Riesgo
+ * aceptado en TAL-67; la señal de que alguien lo está intentando es la línea
+ * "Invalid verification code" (nivel INFO) en los logs de Convex.
  *
  * `byte % 32` es uniforme porque 256 es múltiplo exacto de 32: no hace falta
  * descartar muestras para evitar sesgo.
@@ -112,8 +117,11 @@ export const CodigoRecuperacion = Email({
   // versión de la librería compara el string crudo contra `providerAccountId`,
   // así que escribir el correo con otra capitalización fallaba con un error
   // incomprensible.
+  //
+  // Acepta los dos nombres del campo: el canje manda `correo` (ver auth.ts y
+  // RecuperarContrasena.tsx) y un frontend antiguo todavía manda `email`.
   authorize: async (params, cuenta) => {
-    const email = String(params.email ?? "")
+    const email = String(params.email ?? params.correo ?? "")
       .trim()
       .toLowerCase();
     if (email === "" || email !== cuenta.providerAccountId) {
@@ -121,50 +129,18 @@ export const CodigoRecuperacion = Email({
     }
   },
 
-  // Se envía con `fetch` en vez del SDK de Resend porque esto corre dentro de
-  // la action `signIn` declarada en convex/auth.ts, y ese fichero exporta
-  // también una query y una mutation: nunca puede llevar "use node". El
-  // aislado de Convex trae fetch y Web Crypto, así que no hace falta nada más.
+  // El envío vive en `correo.ts`, compartido con el aviso de cambio de
+  // contraseña. Sus fallos llegan aquí como ConvexError, que es lo que
+  // `recuperacion.solicitarCodigo` necesita para liberar la reserva de cuota.
+  //
+  // Se manda `token` y jamás la `url` que la librería construye con el código
+  // como query param: acabaría en el historial y en la cabecera Referer.
   sendVerificationRequest: async ({ identifier: email, token }) => {
-    const apiKey = process.env.RESEND_API_KEY;
-    if (apiKey === undefined) {
-      // Marcador interno para `recuperacion.solicitarCodigo`; su texto no llega
-      // a la persona (ver la nota sobre enumeración en recuperacion.ts).
-      throw new ConvexError("Falta RESEND_API_KEY");
-    }
-
-    // Se manda `token` y jamás la `url` que la librería construye con el código
-    // como query param: acabaría en el historial y en la cabecera Referer.
-    let respuesta: Response;
-    try {
-      respuesta = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: REMITENTE,
-          to: [email],
-          subject: `${conGuion(token)} es tu código de Vibe CRM`,
-          text: textoPlano(token),
-          html: cuerpoHtml(token),
-        }),
-      });
-    } catch {
-      // Timeout, DNS o red: `fetch` lanza un TypeError, que no es ConvexError y
-      // por tanto `solicitarCodigo` lo confundiría con "no hay cuenta" y no
-      // liberaría la reserva. Se reetiqueta como fallo de entrega.
-      console.error("Resend: no se pudo conectar");
-      throw new ConvexError("Resend no aceptó el envío");
-    }
-
-    if (!respuesta.ok) {
-      // Solo el código de estado: el cuerpo puede traer el correo de destino y
-      // este log es compartido. Nunca se registra el token ni la cabecera de
-      // autorización.
-      console.error(`Resend respondió ${respuesta.status}`);
-      throw new ConvexError("Resend no aceptó el envío");
-    }
+    await enviarCorreo({
+      to: email,
+      subject: `${conGuion(token)} es tu código de Vibe CRM`,
+      text: textoPlano(token),
+      html: cuerpoHtml(token),
+    });
   },
 });

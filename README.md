@@ -26,6 +26,21 @@ npx convex run seed:sembrarUsuarios '{"martaPassword":"<pass>","carlosPassword":
 
 Crea `admin@talent-network.org` (dueña) y `carlos@vibecrm.local` (comercial). Luego entra en `/login` con contraseña, o con Google si ese email ya está provisionado.
 
+### Soporte (funciones internas, solo por CLI)
+
+```bash
+# Devuelve el acceso a alguien bloqueado por intentos fallidos (login y/o código).
+# Borra las dos claves de authRateLimits y la cuota de solicitudes; devuelve
+# cuántas filas ha borrado de cada tipo.
+npx convex run soporte:desbloquearAcceso '{"email":"alguien@dominio.com"}'
+
+# Diagnóstico: correos guardados que no están en minúsculas y sin espacios.
+# Lista vacía = todo correcto. Conviene ejecutarlo antes de cada despliegue.
+npx convex run soporte:revisarCorreos
+```
+
+Hace falta la primera porque los límites de intentos de Convex Auth se pueden agotar desde fuera sin autenticarse: diez contraseñas equivocadas dejan una cuenta sin login durante ~1 h, y diez canjes fallidos hacen lo propio con el código de recuperación (ver TAL-67).
+
 ## Estructura
 
 ```
@@ -39,9 +54,16 @@ src/lib/           Utilidades (fechas locales, api de Convex, guard de auth, nav
 
 ## Seguridad / auth (resumen)
 
-- **Convex Auth** con proveedores Password y Google. Google solo enlaza por email a un usuario ya provisionado (con `rol`); nunca crea cuentas. La tabla `users` lleva `rol` (`propietaria` | `comercial`).
+- **Convex Auth** con proveedores Password y Google. Google solo enlaza por email a un usuario ya provisionado (con `rol`) y con el correo verificado por el proveedor; nunca crea cuentas. La tabla `users` lleva `rol` (`propietaria` | `comercial`).
 - Defensa en capas: `src/proxy.ts` (redirección optimista) + `guardAuth()` server-side por página + `requireUsuario()` en cada función Convex (exige sesión y rol válido). El registro público no puede autoasignarse rol.
 - `/equipo` comprueba el rol server-side (solo la dueña).
+- `auth:signIn` es una action **pública**: `Password.profile()` solo admite los flujos `signIn`, `reset` y `reset-verification`. En particular `signUp` está cerrado, porque con la cuenta ya creada ese camino comparaba contraseñas **sin pasar por el límite de intentos** (TAL-66).
+- Duración de sesión, caducidad del JWT y número de intentos están **declarados** en `convex/auth.ts`, no heredados de la librería.
+
+### Variables de entorno sensibles (Convex)
+
+- `RECUPERACION_SECRETO` es imprescindible: sin ella no se emite ningún código de recuperación (fail-closed) y queda registrado `recuperacion: falta RECUPERACION_SECRETO` en los logs.
+- `AUTH_LOG_LEVEL` **nunca** en `DEBUG` en producción: ese nivel registra el código de recuperación en claro. Tampoco `AUTH_LOG_SECRETS=true`.
 
 ## Despliegue
 
