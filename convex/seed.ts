@@ -91,23 +91,29 @@ export const migrarEmailUsuario = internalMutation({
   args: { emailActual: v.string(), emailNuevo: v.string() },
   returns: v.string(),
   handler: async (ctx, args) => {
+    // Se normalizan los dos: `users.email` y `providerAccountId` se comparan por
+    // índice con la cadena exacta, así que un correo con mayúsculas dejaría a esa
+    // persona sin poder entrar ni con contraseña ni con Google (TAL-66).
+    const emailActual = args.emailActual.trim().toLowerCase();
+    const emailNuevo = args.emailNuevo.trim().toLowerCase();
+
     const yaConEmailNuevo = await ctx.db
       .query("users")
-      .withIndex("email", (q) => q.eq("email", args.emailNuevo))
+      .withIndex("email", (q) => q.eq("email", emailNuevo))
       .unique();
     const usuario = await ctx.db
       .query("users")
-      .withIndex("email", (q) => q.eq("email", args.emailActual))
+      .withIndex("email", (q) => q.eq("email", emailActual))
       .unique();
 
     if (usuario === null) {
       if (yaConEmailNuevo !== null) {
-        return `ya migrado: ${args.emailActual} → ${args.emailNuevo}`;
+        return `ya migrado: ${emailActual} → ${emailNuevo}`;
       }
-      throw new Error(`No existe ningún usuario con email ${args.emailActual}`);
+      throw new Error(`No existe ningún usuario con email ${emailActual}`);
     }
     if (yaConEmailNuevo !== null && yaConEmailNuevo._id !== usuario._id) {
-      throw new Error(`${args.emailNuevo} ya pertenece a otro usuario`);
+      throw new Error(`${emailNuevo} ya pertenece a otro usuario`);
     }
 
     const cuentaPassword = await ctx.db
@@ -118,29 +124,27 @@ export const migrarEmailUsuario = internalMutation({
       .unique();
     if (cuentaPassword === null) {
       throw new Error(
-        `${args.emailActual} no tiene exactamente una cuenta "password" asociada; no se puede migrar el identificador con garantías`,
+        `${emailActual} no tiene exactamente una cuenta "password" asociada; no se puede migrar el identificador con garantías`,
       );
     }
 
     const colisionPassword = await ctx.db
       .query("authAccounts")
       .withIndex("providerAndAccountId", (q) =>
-        q.eq("provider", "password").eq("providerAccountId", args.emailNuevo),
+        q.eq("provider", "password").eq("providerAccountId", emailNuevo),
       )
       .unique();
     if (
       colisionPassword !== null &&
       colisionPassword._id !== cuentaPassword._id
     ) {
-      throw new Error(
-        `${args.emailNuevo} ya identifica otra cuenta "password"`,
-      );
+      throw new Error(`${emailNuevo} ya identifica otra cuenta "password"`);
     }
 
-    await ctx.db.patch(usuario._id, { email: args.emailNuevo });
+    await ctx.db.patch(usuario._id, { email: emailNuevo });
     await ctx.db.patch(cuentaPassword._id, {
-      providerAccountId: args.emailNuevo,
+      providerAccountId: emailNuevo,
     });
-    return `migrado: ${args.emailActual} → ${args.emailNuevo}`;
+    return `migrado: ${emailActual} → ${emailNuevo}`;
   },
 });

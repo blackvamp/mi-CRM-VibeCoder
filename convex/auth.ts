@@ -4,7 +4,23 @@ import Google from "@auth/core/providers/google";
 import { ConvexError } from "convex/values";
 import type { DataModel } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { CodigoRecuperacion } from "./codigoRecuperacion";
+
+const UNA_HORA_MS = 60 * 60 * 1000;
+const UN_DIA_MS = 24 * UNA_HORA_MS;
+
+/**
+ * Los únicos flujos del proveedor Password que esta aplicación usa.
+ *
+ * `auth:signIn` es una action PÚBLICA: la pantalla de acceso solo manda
+ * flow:"signIn", pero cualquiera puede pedir otro flujo desde la consola del
+ * navegador. Por eso la lista vive en el servidor y no en la UI.
+ *
+ * Es lista BLANCA a propósito: si una versión futura de la librería añade un
+ * flujo nuevo, entra cerrado en vez de abrirse solo.
+ */
+const FLUJOS_PERMITIDOS = new Set(["signIn", "reset", "reset-verification"]);
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
@@ -20,12 +36,30 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // de recuperación no encontraría la cuenta y la persona esperaría un
       // correo que nunca sale.
       profile(params) {
-        // `auth:signIn` es una action PÚBLICA y acepta flow:"reset" viniendo de
-        // cualquiera, así que sin esta comprobación el envoltorio
-        // `recuperacion.solicitarCodigo` (cuota + respuesta neutra) sería
-        // saltable llamando a la acción de debajo: se podrían pedir códigos sin
-        // límite, distinguir qué correos existen e invalidar sin parar el código
-        // de quien está intentando recuperar su cuenta.
+        // Cierre de `flow:"signUp"` (auditoría 2026-07-24, TAL-66). No era solo
+        // "registro abierto", que ya lo bloqueaba `createOrUpdateUser`: cuando
+        // la cuenta YA existe, `createAccountFromCredentials` compara la
+        // contraseña y devuelve la cuenta SIN pasar por el límite de intentos
+        // —no lo consulta ni registra el fallo—, así que era fuerza bruta
+        // ilimitada y sin rastro. Y sus dos respuestas eran distinguibles
+        // (cuenta nueva rechazada / cuenta existente), lo que permitía saber qué
+        // correos están dados de alta.
+        //
+        // Se comprueba lo primero de todo y con el mismo error para cualquier
+        // correo, así que este camino tampoco dice ya quién tiene cuenta.
+        if (
+          typeof params.flow !== "string" ||
+          !FLUJOS_PERMITIDOS.has(params.flow)
+        ) {
+          throw new Error("Invalid request");
+        }
+
+        // `auth:signIn` acepta flow:"reset" viniendo de cualquiera, así que sin
+        // esta comprobación el envoltorio `recuperacion.solicitarCodigo`
+        // (cuota + respuesta neutra) sería saltable llamando a la acción de
+        // debajo: se podrían pedir códigos sin límite, distinguir qué correos
+        // existen e invalidar sin parar el código de quien está intentando
+        // recuperar su cuenta.
         //
         // La prueba es un secreto que solo vive en el entorno del deployment:
         // `solicitarCodigo` lo añade desde el servidor y el navegador no puede
@@ -43,8 +77,19 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
             throw new Error("Invalid request");
           }
         }
+
+        // `correo` es el nombre que usa el canje (flow:"reset-verification");
+        // el resto de flujos siguen mandando `email`. Ver el comentario de
+        // `RecuperarContrasena.tsx`: el canje evita el campo `email` para que
+        // nadie pueda envenenar su límite de intentos, y aquí se aceptan los dos
+        // nombres para que un frontend antiguo siga funcionando durante el
+        // despliegue.
+        const correo = params.email ?? params.correo;
+        if (typeof correo !== "string" || correo.trim() === "") {
+          throw new Error("Invalid request");
+        }
         return {
-          email: (params.email as string).trim().toLowerCase(),
+          email: correo.trim().toLowerCase(),
           name: (params.name as string | undefined) || undefined,
         };
       },
@@ -67,8 +112,36 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
     Google({
       clientId: process.env.AUTH_GOOGLE_ID,
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
+      // `profile` propio porque el de serie descarta `email_verified`, y sin ese
+      // dato `createOrUpdateUser` no puede comprobar que el correo con el que se
+      // enlaza la cuenta es realmente de quien entra.
+      //
+      // El objeto se devuelve desde una variable, no como literal, porque el
+      // tipo `User` de Auth.js no declara `emailVerified` y un literal fresco
+      // dispararía el aviso de propiedad desconocida de TypeScript.
+      profile: (perfil) => {
+        const datos = {
+          id: perfil.sub,
+          email: perfil.email,
+          emailVerified: perfil.email_verified === true,
+          name: perfil.name,
+          image: perfil.picture,
+        };
+        return datos;
+      },
     }),
   ],
+  // Declarados en vez de heredados: son los mismos valores por defecto que la
+  // librería aplica hoy (salvo la inactividad, que baja de 30 a 14 días), pero
+  // escritos aquí una actualización no puede cambiarlos sin que se vea en el
+  // diff.
+  session: {
+    totalDurationMs: 30 * UN_DIA_MS,
+    inactiveDurationMs: 14 * UN_DIA_MS,
+  },
+  jwt: { durationMs: UNA_HORA_MS },
+  // El nombre lleva el error de escritura de la librería ("Attemps").
+  signIn: { maxFailedAttempsPerHour: 10 },
   callbacks: {
     // Regla de aprovisionamiento (no "rechazar toda creación", que bloquearía el
     // propio seed): se crea un usuario nuevo SOLO si el profile trae un rol
@@ -84,6 +157,44 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
     // recuperación en silencio (el usuario perdería su rol y `requireUsuario`
     // empezaría a rechazarlo).
     async createOrUpdateUser(ctx, args) {
+      // Aviso "tu contraseña ha cambiado" (TAL-66).
+      //
+      // VA ANTES del return de abajo, y no es un detalle de estilo: en la
+      // recuperación `existingUserId` NUNCA es null —la cuenta password ya
+      // existe—, así que cualquier cosa escrita después de ese return sería
+      // código muerto y el aviso no saldría jamás.
+      //
+      // El discriminador es `type:"verification"` + provider `password`: al
+      // canjear el código, la librería llama a este callback con el proveedor de
+      // la CUENTA (password), no con el que emitió el código
+      // (codigo-recuperacion), que solo autoriza. Y `type:"verification"` solo
+      // ocurre al canjear un código: hoy la recuperación es el único mecanismo
+      // de verificación configurado (no hay `verify` en Password ni proveedores
+      // de email en `providers[]`). Si algún día se añade verificación de correo
+      // en el alta, este filtro deja de ser exclusivo de la recuperación y hay
+      // que afinarlo.
+      //
+      // Se programa en la mutation del canje, que es anterior al cambio real de
+      // la contraseña (ocurre en la action, después). Si ese paso posterior
+      // fallara —solo pasa si el código pertenece a otra cuenta, que ya es un
+      // abuso— se habría avisado de un cambio que no llegó a producirse. Se
+      // acepta: el correo es informativo y no toca nada.
+      if (args.type === "verification" && args.provider.id === "password") {
+        const correo =
+          typeof args.profile.email === "string"
+            ? args.profile.email
+            : undefined;
+        if (correo === undefined) {
+          console.error("aviso de cambio: el código verificado no traía correo");
+        } else {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.correo.avisarCambioContrasena,
+            { email: correo },
+          );
+        }
+      }
+
       if (args.existingUserId !== null) {
         return args.existingUserId;
       }
@@ -98,8 +209,23 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // (Cubre específicamente Google; otro proveedor OAuth futuro debe
       // evaluarse por separado antes de reusar esta rama.)
       if (args.type === "oauth") {
+        // Sin correo verificado no se enlaza nada: el enlace se hace POR correo,
+        // así que aceptar uno sin verificar sería aceptar que el proveedor no
+        // garantiza de quién es. Google lo entrega siempre verificado en sus
+        // cuentas, de modo que en la práctica esto solo se dispara si algún día
+        // se añade otro proveedor OAuth a esta rama.
+        if (args.profile.emailVerified !== true) {
+          throw new ConvexError(
+            "Cuenta de Google no provisionada: no coincide con ningún usuario autorizado.",
+          );
+        }
+        // Se normaliza igual que en el camino de contraseña: `users.email` puede
+        // haber quedado con otra forma (por ejemplo tras `migrarEmailUsuario`) y
+        // el índice compara la cadena exacta.
         const email =
-          typeof profile.email === "string" ? profile.email : undefined;
+          typeof profile.email === "string"
+            ? profile.email.trim().toLowerCase()
+            : undefined;
         // `ctx` llega tipado por la librería como GenericMutationCtx<AnyDataModel>,
         // que no conoce el índice `email` de nuestro `users`. En tiempo de
         // ejecución es, literalmente, el MutationCtx real de este deployment
@@ -123,7 +249,12 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
 
       const rol = profile.rol;
       if (rol !== "propietaria" && rol !== "comercial") {
-        throw new ConvexError("Registro no permitido");
+        // Error normal y no ConvexError: los ConvexError llegan al navegador con
+        // su texto intacto incluso en producción, y este mensaje distinguía una
+        // cuenta existente de una que no lo es. Hoy solo es alcanzable desde el
+        // seed —`flow:"signUp"` está cerrado más arriba—, pero el mensaje no
+        // tiene por qué viajar si mañana se abre otro camino.
+        throw new Error("Registro no permitido");
       }
       return await ctx.db.insert("users", {
         email: typeof profile.email === "string" ? profile.email : undefined,
