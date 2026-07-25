@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as acceso from "../acceso.js";
 import type * as auth from "../auth.js";
 import type * as authz from "../authz.js";
 import type * as clientes from "../clientes.js";
@@ -15,6 +16,7 @@ import type * as codigoRecuperacion from "../codigoRecuperacion.js";
 import type * as correo from "../correo.js";
 import type * as fechas from "../fechas.js";
 import type * as http from "../http.js";
+import type * as identidad from "../identidad.js";
 import type * as interacciones from "../interacciones.js";
 import type * as recuperacion from "../recuperacion.js";
 import type * as seed from "../seed.js";
@@ -30,6 +32,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  acceso: typeof acceso;
   auth: typeof auth;
   authz: typeof authz;
   clientes: typeof clientes;
@@ -37,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   correo: typeof correo;
   fechas: typeof fechas;
   http: typeof http;
+  identidad: typeof identidad;
   interacciones: typeof interacciones;
   recuperacion: typeof recuperacion;
   seed: typeof seed;

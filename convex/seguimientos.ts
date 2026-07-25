@@ -165,7 +165,11 @@ export const crear = mutation({
     const responsable = await ctx.db.get(responsableId);
     if (
       responsable === null ||
-      (responsable.rol !== "propietaria" && responsable.rol !== "comercial")
+      (responsable.rol !== "propietaria" && responsable.rol !== "comercial") ||
+      // Con el acceso retirado no puede entrar a hacer la tarea, así que
+      // asignársela sería programar algo que nadie va a ver (TAL-60). El
+      // selector ya no la ofrece; esto lo garantiza en el servidor.
+      responsable.activo === false
     ) {
       throw new ConvexError("Responsable inválido");
     }

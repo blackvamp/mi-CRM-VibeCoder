@@ -7,6 +7,7 @@ import {
 import { createAccount } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import type { DataModel } from "./_generated/dataModel";
+import { migrarCorreo } from "./identidad";
 
 /** Busca un usuario por email (uso interno del seed, para idempotencia). */
 export const buscarPorEmail = internalQuery({
@@ -97,54 +98,27 @@ export const migrarEmailUsuario = internalMutation({
     const emailActual = args.emailActual.trim().toLowerCase();
     const emailNuevo = args.emailNuevo.trim().toLowerCase();
 
-    const yaConEmailNuevo = await ctx.db
-      .query("users")
-      .withIndex("email", (q) => q.eq("email", emailNuevo))
-      .unique();
     const usuario = await ctx.db
       .query("users")
       .withIndex("email", (q) => q.eq("email", emailActual))
       .unique();
 
     if (usuario === null) {
+      const yaConEmailNuevo = await ctx.db
+        .query("users")
+        .withIndex("email", (q) => q.eq("email", emailNuevo))
+        .unique();
       if (yaConEmailNuevo !== null) {
         return `ya migrado: ${emailActual} → ${emailNuevo}`;
       }
       throw new Error(`No existe ningún usuario con email ${emailActual}`);
     }
-    if (yaConEmailNuevo !== null && yaConEmailNuevo._id !== usuario._id) {
-      throw new Error(`${emailNuevo} ya pertenece a otro usuario`);
-    }
 
-    const cuentaPassword = await ctx.db
-      .query("authAccounts")
-      .withIndex("userIdAndProvider", (q) =>
-        q.eq("userId", usuario._id).eq("provider", "password"),
-      )
-      .unique();
-    if (cuentaPassword === null) {
-      throw new Error(
-        `${emailActual} no tiene exactamente una cuenta "password" asociada; no se puede migrar el identificador con garantías`,
-      );
-    }
-
-    const colisionPassword = await ctx.db
-      .query("authAccounts")
-      .withIndex("providerAndAccountId", (q) =>
-        q.eq("provider", "password").eq("providerAccountId", emailNuevo),
-      )
-      .unique();
-    if (
-      colisionPassword !== null &&
-      colisionPassword._id !== cuentaPassword._id
-    ) {
-      throw new Error(`${emailNuevo} ya identifica otra cuenta "password"`);
-    }
-
-    await ctx.db.patch(usuario._id, { email: emailNuevo });
-    await ctx.db.patch(cuentaPassword._id, {
-      providerAccountId: emailNuevo,
-    });
+    // El movimiento en sí (los dos campos a la vez, con sus comprobaciones de
+    // colisión) vive en `identidad.migrarCorreo`, compartido con
+    // `usuarios.actualizar`: es lógica de identidad y no debe existir por
+    // duplicado. Aquí queda solo lo propio del seed, que es la idempotencia.
+    await migrarCorreo(ctx, usuario, emailNuevo);
     return `migrado: ${emailActual} → ${emailNuevo}`;
   },
 });

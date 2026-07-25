@@ -86,6 +86,64 @@ export const desbloquearAcceso = internalMutation({
 });
 
 /**
+ * Diagnóstico de una persona concreta (TAL-60). Responde a "¿por qué no puede
+ * entrar?" sin tener que abrir el panel de datos de Convex.
+ *
+ * Devuelve el estado de acceso, si tiene cuenta con contraseña y cuántas
+ * sesiones abiertas tiene ahora mismo — ese contador es lo que distingue "no se
+ * le ha creado sesión" de "tiene sesión pero le rechazan los datos", que son
+ * dos fallos muy distintos.
+ *
+ * Nunca devuelve el hash de la contraseña ni ningún secreto.
+ *
+ *   npx convex run soporte:verUsuario '{"email":"alguien@dominio.com"}'
+ */
+export const verUsuario = internalQuery({
+  args: { email: v.string() },
+  returns: v.union(
+    v.null(),
+    v.object({
+      id: v.id("users"),
+      name: v.optional(v.string()),
+      rol: v.optional(v.string()),
+      activo: v.boolean(),
+      contrasenaPendiente: v.boolean(),
+      tieneCuentaPassword: v.boolean(),
+      tieneCuentaGoogle: v.boolean(),
+      sesionesAbiertas: v.number(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const email = canonico(args.email);
+    const u = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", email))
+      .unique();
+    if (u === null) return null;
+
+    const cuentas = await ctx.db
+      .query("authAccounts")
+      .withIndex("userIdAndProvider", (q) => q.eq("userId", u._id))
+      .collect();
+    const sesiones = await ctx.db
+      .query("authSessions")
+      .withIndex("userId", (q) => q.eq("userId", u._id))
+      .collect();
+
+    return {
+      id: u._id,
+      name: u.name,
+      rol: u.rol,
+      activo: u.activo !== false,
+      contrasenaPendiente: u.contrasenaPendiente === true,
+      tieneCuentaPassword: cuentas.some((c) => c.provider === "password"),
+      tieneCuentaGoogle: cuentas.some((c) => c.provider === "google"),
+      sesionesAbiertas: sesiones.length,
+    };
+  },
+});
+
+/**
  * Diagnóstico: correos guardados que NO están en forma canónica.
  *
  * El login con Google enlaza buscando `users.email` por índice, que compara la

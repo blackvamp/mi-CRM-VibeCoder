@@ -2,7 +2,7 @@ import { convexAuth } from "@convex-dev/auth/server";
 import { Password } from "@convex-dev/auth/providers/Password";
 import Google from "@auth/core/providers/google";
 import { ConvexError } from "convex/values";
-import type { DataModel } from "./_generated/dataModel";
+import type { DataModel, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { CodigoRecuperacion } from "./codigoRecuperacion";
@@ -180,13 +180,29 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // abuso— se habría avisado de un cambio que no llegó a producirse. Se
       // acepta: el correo es informativo y no toca nada.
       if (args.type === "verification" && args.provider.id === "password") {
+        // Quien acaba de configurar su contraseña POR PRIMERA VEZ no debe
+        // recibir el aviso: no ha cambiado nada, la ha puesto, y avisarle de un
+        // cambio sospechoso justo entonces solo asusta (TAL-60).
+        //
+        // Esta lectura es segura aquí y solo aquí: dentro de
+        // `verifyCodeAndSignIn` este callback corre en `verifyCodeOnly`, ANTES
+        // de `createNewAndDeleteExistingSession`, así que la marca todavía no
+        // la ha apagado `beforeSessionCreation`. Este enganche NO escribe: si
+        // apagara la marca él mismo, lo haría también en accesos que luego se
+        // rechazan.
+        const db = (ctx as unknown as MutationCtx).db;
+        const invitada =
+          args.existingUserId !== null
+            ? (await db.get(args.existingUserId))?.contrasenaPendiente === true
+            : false;
+
         const correo =
           typeof args.profile.email === "string"
             ? args.profile.email
             : undefined;
         if (correo === undefined) {
           console.error("aviso de cambio: el código verificado no traía correo");
-        } else {
+        } else if (!invitada) {
           await ctx.scheduler.runAfter(
             0,
             internal.correo.avisarCambioContrasena,
@@ -209,6 +225,14 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // (Cubre específicamente Google; otro proveedor OAuth futuro debe
       // evaluarse por separado antes de reusar esta rama.)
       if (args.type === "oauth") {
+        // Observado al probar TAL-60: si esta persona tiene el acceso retirado,
+        // su cuenta de Google SÍ queda enlazada aquí y el acceso se rechaza
+        // después, en `beforeSessionCreation`. Es así porque el enlace ocurre en
+        // `userOAuth`, una mutation anterior y ya confirmada cuando se intenta
+        // crear la sesión. No se fuerza que falle antes: no entra igualmente, no
+        // se crea ninguna sesión, y el enlace le sirve tal cual el día que se le
+        // devuelva el acceso.
+        //
         // Sin correo verificado no se enlaza nada: el enlace se hace POR correo,
         // así que aceptar uno sin verificar sería aceptar que el proveedor no
         // garantiza de quién es. Google lo entrega siempre verificado en sus
@@ -260,7 +284,66 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         email: typeof profile.email === "string" ? profile.email : undefined,
         name: typeof profile.name === "string" ? profile.name : undefined,
         rol,
+        // Marca de "invitada, aún sin entrar" (TAL-60). Se lee del profile por
+        // la MISMA razón por la que es seguro leer `rol`: a esta rama solo se
+        // llega desde `createAccount` invocado en el servidor, porque
+        // `flow:"signUp"` está cerrado arriba. Se normaliza a booleano estricto
+        // para que ningún valor raro del profile se cuele como "true".
+        contrasenaPendiente:
+          profile.contrasenaPendiente === true ? true : undefined,
       });
+    },
+
+    /**
+     * Último filtro antes de que exista una sesión (TAL-60).
+     *
+     * La librería lo invoca desde `createSession`, que es el EMBUDO ÚNICO de
+     * las tres vías de acceso: contraseña, Google y canje de código. Es el
+     * único sitio donde estas dos cosas se pueden garantizar.
+     *
+     * 1. Rechazar a quien tiene el acceso retirado. Sin esto, desactivar a
+     *    alguien no le impediría volver a entrar: el login normal de una cuenta
+     *    `password` que ya existe NO pasa por `createOrUpdateUser`, y
+     *    `requireUsuario` solo actúa al pedir datos, cuando la sesión ya se ha
+     *    creado. Quedaría autenticada dentro de una aplicación que falla.
+     *
+     * 2. Apagar la marca de invitación. Va aquí y en ningún otro lado porque
+     *    esta es la misma transacción que inserta la fila de `authSessions`:
+     *    "marca apagada" y "sesión creada" ocurren juntas o no ocurren. Si se
+     *    apagara en la rama OAuth de `createOrUpdateUser`, significaría
+     *    "empezó a entrar" y no "entró" — `userOAuthImpl` solo emite un código
+     *    de dos minutos, y la sesión nace después, en otra mutation: bastaría
+     *    con abandonar el retorno de Google para perder la marca sin haber
+     *    accedido nunca.
+     *
+     * El orden importa: primero se comprueba el acceso y solo si pasa se apaga
+     * la marca. Y el `throw` revierte la transacción entera, así que un acceso
+     * rechazado tampoco la pierde.
+     *
+     * El texto puede ser explícito sin abrir ninguna vía de enumeración: aquí
+     * solo se llega DESPUÉS de autenticarse, así que quien lo lee ya conocía la
+     * contraseña o controlaba la cuenta de Google.
+     *
+     * Aviso comprobado en las pruebas: aunque este ConvexError lleve su texto,
+     * la librería lo vuelve a envolver al cruzar de su mutation a la action, y
+     * al navegador llega sin `data`. La pantalla de acceso acaba enseñando su
+     * mensaje genérico. No se fuerza: falla del lado seguro. Quien sí lee el
+     * motivo es quien estaba dentro cuando se le retiró el acceso, porque ahí
+     * el ConvexError sale de una query (`requireUsuario`) y conserva su texto.
+     */
+    async beforeSessionCreation(ctx, { userId }) {
+      // `ctx` llega tipado como GenericMutationCtx<AnyDataModel>; en ejecución
+      // es el MutationCtx real de este deployment, igual que en la rama de
+      // Google de arriba.
+      const db = (ctx as unknown as MutationCtx).db;
+      const usuario = await db.get(userId as Id<"users">);
+      if (usuario === null) return;
+      if (usuario.activo === false) {
+        throw new ConvexError("Tu acceso ha sido desactivado.");
+      }
+      if (usuario.contrasenaPendiente === true) {
+        await db.patch(usuario._id, { contrasenaPendiente: undefined });
+      }
     },
   },
 });
