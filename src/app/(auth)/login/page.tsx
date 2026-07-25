@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { useConvexAuth } from "convex/react";
-import { AlertCircle, Eye, EyeOff } from "lucide-react";
+import { useAction, useConvexAuth } from "convex/react";
+import { AlertCircle, Eye, EyeOff, Mail } from "lucide-react";
+import { api } from "@/lib/convexApi";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { mensajeError } from "@/lib/errores";
 import { RecuperarContrasena } from "./RecuperarContrasena";
+import { FormularioCodigo } from "./FormularioCodigo";
 
 // Mensaje deliberadamente genérico: Convex Auth no propaga a través del
 // redirect el motivo exacto del fallo (evita filtrar si un email existe o
@@ -15,21 +18,44 @@ import { RecuperarContrasena } from "./RecuperarContrasena";
 // Google" ni de un error del proveedor.
 const ERROR_GOOGLE = "No se pudo iniciar sesión con Google.";
 
+/**
+ * Acceso en DOS PASOS (TAL-60): primero el correo, después lo que corresponda.
+ *
+ * El motivo no es estético. Quien entra por primera vez tras una invitación no
+ * ha olvidado su contraseña: nunca la ha tenido. Con un único formulario, la
+ * única salida que teníamos era mandarla a "¿Olvidaste tu contraseña?", que es
+ * decirle algo que no es verdad y además no se entiende.
+ *
+ * Quien decide el segundo paso es el servidor (`acceso.comprobarCorreo`), y allí
+ * está explicado con detalle qué revela y qué no: un correo desconocido se
+ * comporta exactamente igual que uno que ya tiene contraseña, así que esta
+ * pantalla NO dice quién tiene cuenta.
+ *
+ * Y no saluda por el nombre a propósito: enseñar "Hola, Ana" convertiría el
+ * primer paso en un extractor de identidades reales, bastante peor que saber
+ * que una cuenta existe.
+ */
 export default function LoginPage() {
   const { signIn } = useAuthActions();
   const { isAuthenticated } = useConvexAuth();
+  const comprobarCorreo = useAction(api.acceso.comprobarCorreo);
+  const solicitarCodigo = useAction(api.recuperacion.solicitarCodigo);
   const router = useRouter();
+
+  // "correo" → "contrasena" | "configurar". "recuperar" se renderiza en LUGAR
+  // del formulario, no junto a él: el enlace que lo activa vive dentro de ese
+  // <form> y mostrar los dos a la vez anidaría formularios.
+  const [paso, setPaso] = useState<
+    "correo" | "contrasena" | "configurar" | "recuperar"
+  >("correo");
+  const [email, setEmail] = useState("");
+  // El correo ya normalizado con el que respondió el servidor. A partir del
+  // paso 2 se usa este y no el del input, para que no puedan divergir.
+  const [correo, setCorreo] = useState("");
+  const [password, setPassword] = useState("");
   const [showPass, setShowPass] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submittingGoogle, setSubmittingGoogle] = useState(false);
-  // Modo recuperación: se renderiza en LUGAR del formulario de acceso, no junto
-  // a él. El enlace que lo activa vive dentro de ese <form>, así que mostrar los
-  // dos a la vez anidaría formularios.
-  const [modo, setModo] = useState<"login" | "recuperar">("login");
-  // El correo ya escrito se copia al pasar a recuperación para no obligar a
-  // teclearlo otra vez. Se lee en el clic porque después el input se desmonta.
-  const emailRef = useRef<HTMLInputElement>(null);
-  const [emailRecuperacion, setEmailRecuperacion] = useState("");
   // `signIn("google")` solo abre el redirect a Google; el resultado (éxito o
   // rechazo de createOrUpdateUser) llega en la carga de página siguiente, no
   // como una excepción capturable en onGoogleClick. Se detecta leyendo el
@@ -61,18 +87,52 @@ export default function LoginPage() {
     }
   }, []);
 
-  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+  function volverAlCorreo() {
+    setError(null);
+    setPassword("");
+    setPaso("correo");
+  }
+
+  async function onContinuar(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
-    const form = new FormData(e.currentTarget);
-    // Solo iniciamos sesión: nunca exponemos el flujo de registro en la UI.
-    form.set("flow", "signIn");
+    const canonico = email.trim().toLowerCase();
+    if (canonico === "") {
+      setError("Escribe tu correo.");
+      return;
+    }
     setSubmitting(true);
     try {
-      await signIn("password", form);
-      router.replace("/hoy");
+      const siguiente = await comprobarCorreo({ email: canonico });
+      setCorreo(canonico);
+      setPaso(siguiente === "codigo" ? "configurar" : "contrasena");
     } catch {
-      setError("Correo o contraseña incorrectos.");
+      // `comprobarCorreo` está diseñada para no lanzar nunca; si algo llega
+      // aquí es un fallo de red o del propio Convex.
+      setError("No se pudo conectar. Inténtalo de nuevo.");
+    }
+    setSubmitting(false);
+  }
+
+  async function onEntrar(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      // Solo iniciamos sesión: nunca exponemos el flujo de registro en la UI.
+      await signIn("password", { email: correo, password, flow: "signIn" });
+      router.replace("/hoy");
+    } catch (e) {
+      // El texto genérico protege la existencia de la cuenta.
+      //
+      // Comprobado en las pruebas de TAL-60: quien tiene el acceso retirado ve
+      // también este mensaje, aunque su contraseña sea correcta. El ConvexError
+      // de `beforeSessionCreation` sí se lanza, pero la librería lo vuelve a
+      // envolver al cruzar de su mutation a la action y llega sin `data`, así
+      // que `mensajeError` no puede sacar el texto. Se acepta: falla del lado
+      // seguro y quien retiró el acceso sabe que lo hizo. Quien sí ve el motivo
+      // es la persona que estaba dentro cuando se lo retiraron (`LimiteDeError`).
+      setError(mensajeError(e, "Correo o contraseña incorrectos."));
       setSubmitting(false);
     }
   }
@@ -88,6 +148,16 @@ export default function LoginPage() {
     }
   }
 
+  const avisoError = error && (
+    <div
+      role="alert"
+      className="flex items-center gap-2 rounded-md border border-error bg-error-bg px-3 py-2.5 text-[13px] text-error-text"
+    >
+      <AlertCircle className="size-4 shrink-0" aria-hidden />
+      {error}
+    </div>
+  );
+
   return (
     <main className="flex min-h-dvh items-center justify-center bg-bg px-4">
       <div className="w-full max-w-[400px]">
@@ -99,97 +169,147 @@ export default function LoginPage() {
         </div>
 
         <div className="rounded-xl border border-border bg-surface p-6 shadow-sm">
-          {modo === "recuperar" ? (
+          {paso === "recuperar" && (
             <RecuperarContrasena
-              emailInicial={emailRecuperacion}
-              onCancelar={() => setModo("login")}
+              emailInicial={correo}
+              onCancelar={volverAlCorreo}
             />
-          ) : (
+          )}
+
+          {paso === "configurar" && (
+            <FormularioCodigo
+              correo={correo}
+              titulo="Configura tu contraseña"
+              intro={
+                <div
+                  role="status"
+                  className="flex items-start gap-2 rounded-md border border-border bg-surface-2 px-3 py-2.5 text-[13px] text-text-muted"
+                >
+                  <Mail className="mt-px size-4 shrink-0" aria-hidden />
+                  <span>
+                    Es tu primera vez aquí, así que todavía no tienes
+                    contraseña. Te hemos mandado un código para que elijas una.
+                    Mira también el spam.
+                  </span>
+                </div>
+              }
+              textoBoton="Guardar y entrar"
+              onReenviar={() => solicitarCodigo({ email: correo })}
+              onCambiarCorreo={volverAlCorreo}
+              onVolver={volverAlCorreo}
+              textoVolver="Usar otro correo"
+            />
+          )}
+
+          {paso === "correo" && (
             <>
-          <h1 className="text-xl font-semibold text-text">Inicia sesión</h1>
-          <p className="mt-1 text-sm text-text-muted">
-            Entra para ver tus tareas del día.
-          </p>
+              <h1 className="text-xl font-semibold text-text">Inicia sesión</h1>
+              <p className="mt-1 text-sm text-text-muted">
+                Entra para ver tus tareas del día.
+              </p>
 
-          <form onSubmit={onSubmit} className="mt-5 flex flex-col gap-4">
-            {error && (
-              <div
-                role="alert"
-                className="flex items-center gap-2 rounded-md border border-error bg-error-bg px-3 py-2.5 text-[13px] text-error-text"
-              >
-                <AlertCircle className="size-4 shrink-0" aria-hidden />
-                {error}
+              <form onSubmit={onContinuar} className="mt-5 flex flex-col gap-4">
+                {avisoError}
+
+                <Input
+                  label="Correo"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  autoFocus
+                  required
+                  placeholder="tu@correo.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+
+                <Button type="submit" loading={submitting} className="w-full">
+                  Continuar
+                </Button>
+              </form>
+
+              <div className="my-4 flex items-center gap-3">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-[12px] text-text-subtle">o</span>
+                <div className="h-px flex-1 bg-border" />
               </div>
-            )}
 
-            <Input
-              label="Correo"
-              name="email"
-              type="email"
-              autoComplete="email"
-              autoFocus
-              required
-              placeholder="tu@correo.com"
-              ref={emailRef}
-            />
-
-            <div className="relative">
-              <Input
-                label="Contraseña"
-                name="password"
-                type={showPass ? "text" : "password"}
-                autoComplete="current-password"
-                required
-                placeholder="••••••••"
-                className="pr-11"
-              />
-              <button
+              <Button
                 type="button"
-                onClick={() => setShowPass((v) => !v)}
-                aria-label={showPass ? "Ocultar contraseña" : "Mostrar contraseña"}
-                aria-pressed={showPass}
-                className="absolute right-2 top-[34px] flex size-9 items-center justify-center rounded-md text-text-subtle hover:bg-surface-2"
+                variant="secondary"
+                onClick={onGoogleClick}
+                loading={submittingGoogle}
+                className="w-full"
               >
-                {showPass ? (
-                  <EyeOff className="size-[18px]" aria-hidden />
-                ) : (
-                  <Eye className="size-[18px]" aria-hidden />
-                )}
-              </button>
-            </div>
+                Entrar con Google
+              </Button>
+            </>
+          )}
 
-            <Button type="submit" loading={submitting} className="w-full">
-              Entrar
-            </Button>
+          {paso === "contrasena" && (
+            <>
+              <h1 className="text-xl font-semibold text-text">
+                Escribe tu contraseña
+              </h1>
+              <p className="mt-1 text-sm text-text-muted">
+                {correo}{" "}
+                <button
+                  type="button"
+                  onClick={volverAlCorreo}
+                  className="text-text underline hover:no-underline"
+                >
+                  Cambiar
+                </button>
+              </p>
 
-            <button
-              type="button"
-              onClick={() => {
-                setError(null);
-                setEmailRecuperacion(emailRef.current?.value ?? "");
-                setModo("recuperar");
-              }}
-              className="text-center text-[13px] text-text-muted hover:text-text"
-            >
-              ¿Olvidaste tu contraseña?
-            </button>
-          </form>
+              <form onSubmit={onEntrar} className="mt-5 flex flex-col gap-4">
+                {avisoError}
 
-          <div className="my-4 flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-[12px] text-text-subtle">o</span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
+                <div className="relative">
+                  <Input
+                    label="Contraseña"
+                    name="password"
+                    type={showPass ? "text" : "password"}
+                    autoComplete="current-password"
+                    autoFocus
+                    required
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="pr-11"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPass((v) => !v)}
+                    aria-label={
+                      showPass ? "Ocultar contraseña" : "Mostrar contraseña"
+                    }
+                    aria-pressed={showPass}
+                    className="absolute right-2 top-[34px] flex size-9 items-center justify-center rounded-md text-text-subtle hover:bg-surface-2"
+                  >
+                    {showPass ? (
+                      <EyeOff className="size-[18px]" aria-hidden />
+                    ) : (
+                      <Eye className="size-[18px]" aria-hidden />
+                    )}
+                  </button>
+                </div>
 
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={onGoogleClick}
-            loading={submittingGoogle}
-            className="w-full"
-          >
-            Entrar con Google
-          </Button>
+                <Button type="submit" loading={submitting} className="w-full">
+                  Entrar
+                </Button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setPaso("recuperar");
+                  }}
+                  className="text-center text-[13px] text-text-muted hover:text-text"
+                >
+                  He olvidado mi contraseña
+                </button>
+              </form>
             </>
           )}
         </div>

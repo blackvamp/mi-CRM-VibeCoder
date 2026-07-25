@@ -27,8 +27,9 @@ export default defineSchema({
 
   // Tabla `users` de Convex Auth extendida con `rol`. Debe conservar los campos
   // e índice de authTables (perder el índice `email` o un campo rompe el login).
-  // `rol` es opcional en el schema pero lo exige `requireUsuario`: solo el seed
-  // (vía createAccount con profile.rol) puede provisionarlo.
+  // `rol` es opcional en el schema pero lo exige `requireUsuario`: solo el
+  // servidor (vía createAccount con profile.rol — el seed o `usuarios.invitar`)
+  // puede provisionarlo.
   users: defineTable({
     name: v.optional(v.string()),
     image: v.optional(v.string()),
@@ -38,6 +39,23 @@ export default defineSchema({
     phoneVerificationTime: v.optional(v.number()),
     isAnonymous: v.optional(v.boolean()),
     rol: v.optional(v.union(v.literal("propietaria"), v.literal("comercial"))),
+
+    // Acceso retirado por la dueña (TAL-60). Opcional a propósito: `undefined`
+    // significa ACTIVA, así las filas anteriores a este campo siguen valiendo
+    // sin migración. Solo `false` bloquea, y lo hace por dos vías —
+    // `beforeSessionCreation` impide crear sesiones nuevas y `requireUsuario`
+    // corta las que ya estaban abiertas.
+    activo: v.optional(v.boolean()),
+
+    // Invitada y todavía sin entrar (TAL-60). Es lo que hace que el paso 1 del
+    // login le ofrezca configurar su contraseña en vez de pedírsela.
+    //
+    // Significa exactamente «se le invitó y aún no ha accedido por ninguna
+    // vía», NO «no tiene contraseña»: quien entre con Google seguirá sin
+    // tenerla. Se enciende solo en `usuarios.invitar` y se apaga en un único
+    // sitio, `beforeSessionCreation` (convex/auth.ts), que es la misma
+    // transacción que inserta la sesión — así apagarla y entrar son atómicos.
+    contrasenaPendiente: v.optional(v.boolean()),
   }).index("email", ["email"]),
 
   // Cuota de solicitudes de recuperación de contraseña (TAL-65). Los CÓDIGOS no

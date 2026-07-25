@@ -4,12 +4,16 @@ import { convexAuthNextjsToken } from "@convex-dev/auth/nextjs/server";
 import { api } from "@/lib/convexApi";
 import { guardAuth } from "@/lib/authGuard";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Proximamente } from "@/components/Proximamente";
+import { EquipoClient } from "./EquipoClient";
 
 /**
  * Gate REAL de autorización (no solo ocultar el tab): primero exige sesión
  * (guardAuth → /login si no hay), luego comprueba el ROL server-side. Un usuario
- * "comercial" que teclee /equipo ve "Acceso restringido". El CRUD llega en TAL-60.
+ * "comercial" que teclee /equipo ve "Acceso restringido".
+ *
+ * Es la primera de tres capas, no la única: las funciones de Convex del panel
+ * exigen `requirePropietaria` por su cuenta, y las reglas de negocio se
+ * comprueban dentro de cada mutation.
  */
 export default async function EquipoPage() {
   await guardAuth();
@@ -29,5 +33,7 @@ export default async function EquipoPage() {
     );
   }
 
-  return <Proximamente titulo="Gestión de usuarios y roles" />;
+  // Se le pasa quién es para poder ocultar el botón de retirarse el acceso a
+  // una misma. Es solo presentación: quien lo impide de verdad es el servidor.
+  return <EquipoClient yoId={user._id} />;
 }

@@ -2,9 +2,10 @@ import { v, ConvexError } from "convex/values";
 import { internalAction } from "./_generated/server";
 
 /**
- * Envío de correo con Resend, compartido por los dos mensajes que manda el
- * producto: el código para recuperar la contraseña (`codigoRecuperacion.ts`) y
- * el aviso de que esa contraseña ha cambiado (aquí abajo).
+ * Envío de correo con Resend, compartido por los tres mensajes que manda el
+ * producto: el código para recuperar la contraseña (`codigoRecuperacion.ts`), el
+ * aviso de que esa contraseña ha cambiado y la invitación a entrar por primera
+ * vez (los dos, aquí abajo).
  *
  * Se usa `fetch` y no el SDK de Resend porque `enviarCorreo` acaba ejecutándose
  * dentro de la action `signIn` declarada en convex/auth.ts, y ese fichero
@@ -136,6 +137,121 @@ export const avisarCambioContrasena = internalAction({
     } catch {
       // Sin el correo en el log: es compartido.
       console.error("aviso de cambio: no se pudo enviar");
+    }
+    return null;
+  },
+});
+
+const ASUNTO_INVITACION = "Ya tienes acceso a Vibe CRM";
+
+/**
+ * El nombre lo escribe la dueña en un formulario y acaba dentro del HTML del
+ * correo. Un cliente de correo no ejecuta JavaScript, pero sí interpreta las
+ * etiquetas: sin escapar, un nombre con `<` podría descolocar el mensaje o
+ * colar un enlace. Es el único dato de entrada libre que va al HTML.
+ */
+function escaparHtml(texto: string): string {
+  return texto
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Dirección pública de la aplicación, para poder decirle a la persona dónde
+ * entrar. Es un valor de presentación, no un secreto; el respaldo evita que un
+ * despliegue sin configurar mande un correo que no lleva a ninguna parte.
+ */
+function sitio(): string {
+  return (
+    process.env.SITIO_URL ?? "https://mi-crm-vibecoder-production.up.railway.app"
+  );
+}
+
+function textoInvitacion(nombre: string): string {
+  return `Hola, ${nombre}:
+
+Ya tienes acceso a Vibe CRM.
+
+Para entrar por primera vez, abre esta dirección:
+
+${sitio()}/login
+
+Escribe ahí este mismo correo y te mandaremos un código para que elijas tu
+contraseña. Ese código caduca a los 10 minutos; si se te pasa, vuelve a escribir
+tu correo y te llegará otro.
+
+Si prefieres entrar con Google y esta dirección es tu cuenta de Google, puedes
+usar directamente el botón "Entrar con Google".
+
+— Vibe CRM`;
+}
+
+/**
+ * Igual que el resto de correos del producto: NINGÚN enlace de un solo uso.
+ *
+ * No es una manía. Los antivirus y los filtros de correo corporativos abren los
+ * enlaces antes que la persona para inspeccionarlos, así que un enlace mágico o
+ * un código incrustado en la URL llegaría ya gastado y la persona no podría
+ * entrar sin saber por qué. Aquí lo único que viaja es la dirección de la
+ * pantalla de acceso, que es una página normal: abrirla mil veces no consume
+ * nada. El código se emite después, cuando la persona lo pide de verdad.
+ */
+function htmlInvitacion(nombre: string): string {
+  const url = `${sitio()}/login`;
+  const quien = escaparHtml(nombre);
+  return `<div style="margin:0;padding:24px;background:#f5f5f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1c1917">
+  <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #e7e5e4;border-radius:12px;padding:28px">
+    <p style="margin:0 0 4px;font-size:17px;font-weight:600">Vibe CRM</p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.5">
+      Hola, ${quien}: ya tienes acceso a Vibe CRM.
+    </p>
+    <p style="margin:0 0 8px;font-size:15px;line-height:1.5">
+      Para entrar por primera vez, abre esta dirección:
+    </p>
+    <p style="margin:0 0 20px;padding:14px;background:#f5f5f4;border-radius:8px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px;word-break:break-all">
+      ${url}
+    </p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.5">
+      Escribe ahí este mismo correo y te mandaremos un código para que elijas tu
+      contraseña. Caduca a los 10 minutos; si se te pasa, vuelve a escribir tu
+      correo y te llegará otro.
+    </p>
+    <p style="margin:0;font-size:14px;line-height:1.5;color:#78716c">
+      Si prefieres entrar con Google y esta dirección es tu cuenta de Google,
+      puedes usar directamente el botón «Entrar con Google».
+    </p>
+  </div>
+</div>`;
+}
+
+/**
+ * Invitación a entrar por primera vez (TAL-60).
+ *
+ * La programa `usuarios.invitar` con el scheduler, y por eso su fallo no puede
+ * deshacer el alta: para cuando esto corre, la persona ya existe y puede entrar
+ * por su cuenta. Entrega best-effort, igual que el aviso de cambio.
+ *
+ * No lleva el código dentro a propósito: entre que se manda el correo y la
+ * persona lo lee pueden pasar horas, y el código dura 10 minutos. Se emite
+ * cuando escribe su correo en la pantalla de acceso, que es cuando de verdad lo
+ * va a usar.
+ */
+export const invitarUsuario = internalAction({
+  args: { email: v.string(), nombre: v.string() },
+  returns: v.null(),
+  handler: async (_ctx, args): Promise<null> => {
+    try {
+      await enviarCorreo({
+        to: args.email,
+        subject: ASUNTO_INVITACION,
+        text: textoInvitacion(args.nombre),
+        html: htmlInvitacion(args.nombre),
+      });
+    } catch {
+      // Sin el correo en el log: es compartido.
+      console.error("invitación: no se pudo enviar");
     }
     return null;
   },

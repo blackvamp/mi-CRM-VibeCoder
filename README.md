@@ -16,15 +16,21 @@ npm run dev         # frontend: http://localhost:3000
 
 Hacen falta los dos procesos a la vez (Convex y Next). El primer `npx convex dev` pide login e inicializa el deployment; a partir de ahí `convex/_generated` y `.env.local` (con `NEXT_PUBLIC_CONVEX_URL`) quedan listos.
 
-### Usuarios (seed dev)
+### Usuarios
 
-El registro público está cerrado a propósito. Los usuarios se crean con una función interna (dev-only):
+El registro público está cerrado a propósito: nadie puede darse de alta ni asignarse un rol. Hay dos formas de crear personas, las dos desde el servidor.
+
+**Desde la aplicación (lo normal).** La dueña las da de alta en `/equipo`. No se les pone contraseña: reciben una invitación por correo, entran en `/login`, escriben su dirección y configuran su contraseña con el código que les llega (TAL-60).
+
+**Con el seed (arranque del proyecto).** Para crear la primera dueña, cuando todavía no hay nadie que pueda invitar:
 
 ```bash
 npx convex run seed:sembrarUsuarios '{"martaPassword":"<pass>","carlosPassword":"<pass>"}'
 ```
 
 Crea `admin@talent-network.org` (dueña) y `carlos@vibecrm.local` (comercial). Luego entra en `/login` con contraseña, o con Google si ese email ya está provisionado.
+
+**Retirar el acceso** se hace desde `/equipo` y no borra a nadie: la persona deja de poder entrar, pero su nombre sigue apareciendo en las interacciones, ventas y seguimientos que registró. Se le puede devolver el acceso cuando sea, con su misma contraseña.
 
 ### Soporte (funciones internas, solo por CLI)
 
@@ -37,6 +43,11 @@ npx convex run soporte:desbloquearAcceso '{"email":"alguien@dominio.com"}'
 # Diagnóstico: correos guardados que no están en minúsculas y sin espacios.
 # Lista vacía = todo correcto. Conviene ejecutarlo antes de cada despliegue.
 npx convex run soporte:revisarCorreos
+
+# Diagnóstico de una persona: rol, si tiene el acceso retirado, si está
+# pendiente de entrar por primera vez, qué cuentas de acceso tiene y cuántas
+# sesiones abiertas. Responde a "¿por qué no puede entrar?".
+npx convex run soporte:verUsuario '{"email":"alguien@dominio.com"}'
 ```
 
 Hace falta la primera porque los límites de intentos de Convex Auth se pueden agotar desde fuera sin autenticarse: diez contraseñas equivocadas dejan una cuenta sin login durante ~1 h, y diez canjes fallidos hacen lo propio con el código de recuperación (ver TAL-67).
@@ -56,13 +67,32 @@ src/lib/           Utilidades (fechas locales, api de Convex, guard de auth, nav
 
 - **Convex Auth** con proveedores Password y Google. Google solo enlaza por email a un usuario ya provisionado (con `rol`) y con el correo verificado por el proveedor; nunca crea cuentas. La tabla `users` lleva `rol` (`propietaria` | `comercial`).
 - Defensa en capas: `src/proxy.ts` (redirección optimista) + `guardAuth()` server-side por página + `requireUsuario()` en cada función Convex (exige sesión y rol válido). El registro público no puede autoasignarse rol.
-- `/equipo` comprueba el rol server-side (solo la dueña).
+- `/equipo` comprueba el rol server-side (solo la dueña), y las funciones del panel exigen además `requirePropietaria` por su cuenta. Las reglas que protegen el CRM —no retirarte el acceso a ti misma, no quitarte el rol de dueña, no dejar el negocio sin ninguna dueña activa— se comprueban **dentro de la mutation**, no ocultando botones.
 - `auth:signIn` es una action **pública**: `Password.profile()` solo admite los flujos `signIn`, `reset` y `reset-verification`. En particular `signUp` está cerrado, porque con la cuenta ya creada ese camino comparaba contraseñas **sin pasar por el límite de intentos** (TAL-66).
 - Duración de sesión, caducidad del JWT y número de intentos están **declarados** en `convex/auth.ts`, no heredados de la librería.
 
+### Acceso retirado: dos candados, no uno (TAL-60)
+
+Desactivar a alguien necesita las dos mitades, y por motivos distintos:
+
+- `beforeSessionCreation` (`convex/auth.ts`) impide que nazca una sesión **nueva**. Es el único punto por el que pasan las tres vías —contraseña, Google y canje de código—; sin él, el login normal de una cuenta que ya existe no toca `createOrUpdateUser` y la persona volvería a entrar sin más.
+- `requireUsuario` (`convex/authz.ts`) corta las sesiones que **ya estaban abiertas**: al desactivar se invalidan, pero el JWT que el navegador ya tiene sigue siendo válido hasta una hora.
+
+Ese mismo callback es el único sitio que apaga la marca `contrasenaPendiente`, y va ahí porque es la misma transacción que inserta la sesión: si el acceso se abandona a mitad o se rechaza, Convex revierte también el apagado y la marca se conserva.
+
+### Acceso en dos pasos, y lo que revela
+
+`/login` pide primero el correo y `acceso.comprobarCorreo` decide qué viene después. Solo responde «código» a quien fue invitado y aún no ha entrado; **un correo desconocido se comporta exactamente igual que uno que ya tiene contraseña**, así que esa pantalla no dice quién tiene cuenta. Lo único distinguible es el estado de invitación pendiente, que se apaga al primer acceso: riesgo aceptado y documentado en TAL-67.
+
+### Correos: ningún enlace de un solo uso
+
+Los antivirus y los filtros de correo corporativos abren los enlaces antes que la persona para inspeccionarlos. Un enlace mágico o un código incrustado en la URL llegaría **ya gastado**. Por eso ningún correo del producto lleva nada consumible: solo la dirección de `/login`, que es una página normal, y los códigos se teclean.
+
 ### Variables de entorno sensibles (Convex)
 
-- `RECUPERACION_SECRETO` es imprescindible: sin ella no se emite ningún código de recuperación (fail-closed) y queda registrado `recuperacion: falta RECUPERACION_SECRETO` en los logs.
+- `RECUPERACION_SECRETO` es imprescindible: sin ella no se emite ningún código de recuperación (fail-closed) y queda registrado `recuperacion: falta RECUPERACION_SECRETO` en los logs. También deja sin efecto la invitación, porque el código de configuración sale por ese mismo camino.
+- `RESEND_API_KEY`: sin ella no sale ningún correo (código, aviso de cambio ni invitación).
+- `SITIO_URL`: dirección pública de la web, la que se escribe en el correo de invitación. No es un secreto; si falta se usa la de Railway.
 - `AUTH_LOG_LEVEL` **nunca** en `DEBUG` en producción: ese nivel registra el código de recuperación en claro. Tampoco `AUTH_LOG_SECRETS=true`.
 
 ## Despliegue

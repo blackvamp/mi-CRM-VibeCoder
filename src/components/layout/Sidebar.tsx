@@ -10,11 +10,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Overlay } from "@/components/ui/Overlay";
 import { useNavItems, useUsuarioActual } from "@/lib/useSesion";
-
-const ROL_LABEL: Record<"propietaria" | "comercial", string> = {
-  propietaria: "Dueña",
-  comercial: "Atiende y vende",
-};
+import { ROL_LABEL } from "@/lib/roles";
 
 export function Sidebar() {
   const pathname = usePathname();
