@@ -1,5 +1,5 @@
-import { v, ConvexError } from "convex/values";
-import { action, internalMutation } from "./_generated/server";
+import { v } from "convex/values";
+import { action, internalAction, internalMutation } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
@@ -89,6 +89,38 @@ export const reservarEnvio = internalMutation({
 });
 
 /**
+ * Barrido periódico de las solicitudes que ya no cuentan para nada (TAL-69, S2).
+ *
+ * `reservarEnvio` limpia de paso lo viejo, pero solo del correo que está pidiendo
+ * un código: una dirección que pide uno y no vuelve nunca deja sus filas ahí para
+ * siempre. Esto es el cinturón que cierra la clase entera de problema en vez de
+ * un camino concreto, y por eso existe el índice `by_momento` — el compuesto
+ * empieza por el correo y no sirve para barrer por antigüedad.
+ *
+ * Acotado a `LOTE` por ejecución para no acercarse a los límites de escritura de
+ * una mutation. Se ejecuta cada hora (`convex/crons.ts`), así que si algún día
+ * hubiera un pico se drena en unas cuantas pasadas en vez de fallar entera.
+ *
+ * Devuelve cuántas ha borrado: es la evidencia de que el cron está vivo.
+ */
+export const limpiarIntentosViejos = internalMutation({
+  args: {},
+  returns: v.number(),
+  handler: async (ctx) => {
+    const LOTE = 500;
+    const limite = Date.now() - UNA_HORA_MS;
+    const viejos = await ctx.db
+      .query("intentosRecuperacion")
+      .withIndex("by_momento", (q) => q.lt("momento", limite))
+      .take(LOTE);
+    for (const viejo of viejos) {
+      await ctx.db.delete(viejo._id);
+    }
+    return viejos.length;
+  },
+});
+
+/**
  * Suelta una reserva concreta cuando el envío falló.
  *
  * Recibe el id exacto y no "la última de este correo": si Resend tarda más que
@@ -160,28 +192,62 @@ export const solicitarCodigo = action({
           secretoInterno: process.env.RECUPERACION_SECRETO,
         },
       });
-    } catch (error) {
-      if (error instanceof ConvexError) {
-        // Falló el envío (lo marca codigoRecuperacion.ts). El código ya se creó,
-        // así que se suelta la reserva para no gastarle la cuota a quien no ha
-        // recibido nada. Sin el correo en el log: es compartido.
-        //
-        // La liberación es best-effort: si fallara, no puede convertirse en una
-        // excepción hacia fuera, porque solo se llega hasta aquí cuando la
-        // cuenta existe y eso volvería a delatarla.
-        try {
-          await ctx.runMutation(internal.recuperacion.liberarEnvio, {
-            reservaId,
-          });
-        } catch {
-          console.error("recuperacion: no se pudo liberar la reserva");
-        }
-        console.error("recuperacion: no se pudo enviar el código");
+    } catch {
+      // Se libera la reserva en CUALQUIER fallo, no solo en los de envío.
+      //
+      // Antes se distinguía por el tipo de error, y eso dejó de tener sentido
+      // por dos motivos (TAL-69). El primero es que ya no se puede: el
+      // envoltorio de `auth:signIn` normaliza todos los errores internos a un
+      // ConvexError idéntico, así que el tipo ya no dice de qué fallo se trata.
+      // El segundo es que la distinción sobraba: si `signIn` lanzó, por el
+      // motivo que sea, esta persona NO ha recibido ningún código, y cobrarle
+      // cuota por algo que no llegó nunca fue siempre lo incorrecto.
+      //
+      // Y esto es además lo que cierra el crecimiento sin tope de la tabla (S2):
+      // la reserva se inserta antes de saber si la cuenta existe, así que sin
+      // esta liberación cualquiera podía sembrar tres filas permanentes por cada
+      // dirección inventada, sin autenticarse y sin que nadie las borrara.
+      //
+      // Best-effort: si la propia liberación fallara, no puede salir de aquí
+      // como excepción — esta ruta es pública y cualquier grieta reabre la
+      // enumeración. Sin el correo en el log: es compartido.
+      try {
+        await ctx.runMutation(internal.recuperacion.liberarEnvio, {
+          reservaId,
+        });
+      } catch {
+        // Este sí puede ir aquí: solo se alcanza si falla la propia liberación,
+        // que no depende de si la cuenta existe.
+        console.error("recuperacion: no se pudo liberar la reserva");
       }
-      // Cualquier otro error (no hay cuenta de contraseña para ese correo, o la
-      // llamada no traía la prueba interna) se traga sin dejar rastro: es una
-      // ruta pública y registrar cada intento permitiría inundar los logs.
+      // El registro del fallo va por el scheduler y NO con un console.error
+      // aquí. Suena a manía y no lo es: en un deployment de desarrollo, Convex
+      // devuelve al cliente las `logLines` de la invocación, y este camino solo
+      // se recorre cuando la cuenta NO existe. Una línea de log que aparece
+      // exactamente para los correos desconocidos es un delator tan bueno como
+      // un mensaje de error distinto — comprobado al verificar TAL-69.
+      //
+      // Al programarlo, el mensaje se escribe en otra invocación: sigue estando
+      // entero en los logs del deployment, que es donde hace falta, y no viaja
+      // en esta respuesta.
+      await ctx.scheduler.runAfter(0, internal.recuperacion.registrarFallo, {});
     }
+    return null;
+  },
+});
+
+/**
+ * Escribe en el log que una solicitud de código no salió adelante.
+ *
+ * Existe solo para que ese registro ocurra FUERA de la invocación que responde
+ * al navegador (ver el comentario de arriba). Sin texto sobre el correo: es un
+ * log compartido y la dirección no debe aparecer en él.
+ */
+export const registrarFallo = internalAction({
+  args: {},
+  returns: v.null(),
+  handler: async (): Promise<null> => {
+    console.error("recuperacion: no se pudo emitir el código");
     return null;
   },
 });

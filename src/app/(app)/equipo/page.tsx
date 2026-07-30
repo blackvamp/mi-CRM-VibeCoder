@@ -4,6 +4,7 @@ import { convexAuthNextjsToken } from "@convex-dev/auth/nextjs/server";
 import { api } from "@/lib/convexApi";
 import { guardAuth } from "@/lib/authGuard";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { AvisoDeAcceso } from "@/components/layout/LimiteDeError";
 import { EquipoClient } from "./EquipoClient";
 
 /**
@@ -19,7 +20,33 @@ export default async function EquipoPage() {
   await guardAuth();
 
   const token = await convexAuthNextjsToken();
-  const user = await fetchQuery(api.usuarios.actual, {}, { token });
+
+  // Esta consulta corre en el SERVIDOR, así que el `LimiteDeError` del cliente
+  // no la cubre: si lanza, sale la pantalla de error de Next (TAL-69, S8). Y
+  // lanza en un caso perfectamente normal — a alguien le retiran el acceso
+  // mientras tiene la aplicación abierta: `guardAuth()` pasa, porque su JWT
+  // sigue siendo válido hasta una hora, y `requireUsuario` la rechaza.
+  //
+  // Un `redirect("/login")` aquí NO valdría, y conviene dejarlo escrito: redirigir
+  // desde el servidor no toca el token del navegador, así que `src/proxy.ts`
+  // seguiría viendo una sesión autenticada y rebotaría de vuelta a `/hoy`. Sería
+  // un bucle, no una salida.
+  //
+  // La salida solo puede ocurrir en el cliente, cerrando la sesión de verdad
+  // antes de navegar. Eso es exactamente lo que hace `AvisoDeAcceso`.
+  let user;
+  try {
+    user = await fetchQuery(api.usuarios.actual, {}, { token });
+  } catch {
+    // Sin reintento: la consulta ya ocurrió en el servidor y no hay estado de
+    // cliente que reiniciar. El motivo interno no viaja; el mensaje es fijo.
+    return (
+      <AvisoDeAcceso
+        tono="acceso"
+        mensaje="Tu acceso ha cambiado. Vuelve a iniciar sesión."
+      />
+    );
+  }
 
   if (user.rol !== "propietaria") {
     return (

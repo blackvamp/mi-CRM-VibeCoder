@@ -12,6 +12,7 @@ import type { DataModel, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { requireUsuario, requirePropietaria } from "./authz";
 import { migrarCorreo } from "./identidad";
+import { invitacionVigente } from "./invitacion";
 
 const ROL = v.union(v.literal("propietaria"), v.literal("comercial"));
 
@@ -88,8 +89,13 @@ export const listar = query({
  * La lista del panel de equipo (TAL-60). A diferencia de `listar`, SÍ incluye a
  * las personas desactivadas: es lo que permite volver a darles acceso.
  *
- * `activo` y `pendiente` se normalizan aquí a booleano para que la pantalla no
- * tenga que conocer el convenio de "undefined = activa".
+ * `activo`, `pendiente` y `caducada` se normalizan aquí a booleano para que la
+ * pantalla no tenga que conocer el convenio de "undefined = activa" ni la regla
+ * de caducidad.
+ *
+ * `pendiente` y `caducada` se calculan con `invitacionVigente`, el mismo helper
+ * que usa el paso 1 del acceso: si divergieran, el panel diría "pendiente de
+ * entrar" de alguien a quien el acceso ya trata como caducado.
  */
 export const listarEquipo = query({
   args: {},
@@ -101,21 +107,31 @@ export const listarEquipo = query({
       rol: ROL,
       activo: v.boolean(),
       pendiente: v.boolean(),
+      caducada: v.boolean(),
     }),
   ),
   handler: async (ctx) => {
     await requirePropietaria(ctx);
+    const ahora = Date.now();
     const todos = await ctx.db.query("users").collect();
     return todos
       .filter((u) => u.rol === "propietaria" || u.rol === "comercial")
-      .map((u) => ({
-        _id: u._id,
-        name: u.name,
-        email: u.email,
-        rol: u.rol!,
-        activo: u.activo !== false,
-        pendiente: u.contrasenaPendiente === true,
-      }))
+      .map((u) => {
+        const invitada = u.contrasenaPendiente === true;
+        const vigente = invitacionVigente(u, ahora);
+        return {
+          _id: u._id,
+          name: u.name,
+          email: u.email,
+          rol: u.rol!,
+          activo: u.activo !== false,
+          pendiente: vigente,
+          // Invitada, sin entrar, y ya fuera de plazo. Se distingue de
+          // `pendiente` porque a la dueña le dicen cosas distintas: una espera
+          // a que la persona entre, la otra pide actuar.
+          caducada: invitada && !vigente,
+        };
+      })
       .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "", "es"));
   },
 });
@@ -199,7 +215,15 @@ export const invitar = action({
     await createAccount<DataModel>(ctx, {
       provider: "password",
       account: { id: email, secret: secretoInservible() },
-      profile: { email, name: nombre, rol: args.rol, contrasenaPendiente: true },
+      profile: {
+        email,
+        name: nombre,
+        rol: args.rol,
+        contrasenaPendiente: true,
+        // Marca de tiempo para que la invitación caduque (TAL-69, S7). Los dos
+        // campos viajan juntos y `createOrUpdateUser` los persiste juntos.
+        invitadaEn: Date.now(),
+      },
     });
 
     // El correo va en una tarea aparte y su fallo NO deshace el alta: la
@@ -262,10 +286,24 @@ export const actualizar = mutation({
 });
 
 /**
- * Comprueba que queda alguna OTRA dueña activa además de `salvo`. Se usa antes
- * de degradar o de desactivar a una dueña: quedarse sin ninguna deja el negocio
- * sin nadie que pueda gestionar el equipo, y sin vuelta atrás desde la propia
- * aplicación.
+ * Comprueba que queda alguna OTRA dueña activa además de `salvo`.
+ *
+ * ATENCIÓN, y esto lo aclaró la auditoría de TAL-69 (S6): desde sus dos llamadas
+ * actuales **este error no se puede producir nunca**. En `actualizar` y en
+ * `marcarAcceso`, la comprobación de «no a ti misma» corre ANTES, así que la
+ * persona afectada nunca es quien llama; y quien llama pasó por
+ * `requirePropietaria`, luego es una dueña activa que no está en `salvo` y que
+ * por tanto siempre cuenta. El resultado nunca puede ser cero.
+ *
+ * La invariante «nunca cero dueñas activas» SÍ se cumple, pero la sostienen esas
+ * dos reglas de autoprotección, no esta función. Incluso en concurrencia: si dos
+ * dueñas se desactivaran a la vez, `requirePropietaria` mete la fila de la
+ * llamante en el conjunto de lectura, así que el control optimista de Convex
+ * serializa las mutations y la segunda ya se encuentra rechazada.
+ *
+ * No se borra porque es la red del día en que aparezca un TERCER sitio que
+ * degrade o desactive sin esa comprobación previa. Pero conviene no confundirse:
+ * hoy es un cinturón, no el tirante.
  */
 async function exigirOtraPropietariaActiva(
   ctx: MutationCtx,
@@ -286,6 +324,15 @@ async function exigirOtraPropietariaActiva(
  * Marca el acceso de alguien, con las reglas de seguridad dentro de la
  * transacción. Interna: la abren las actions de abajo, que además cierran las
  * sesiones abiertas.
+ *
+ * NO EJECUTAR SUELTA POR CLI para retirar un acceso. Hace falta `desactivar`,
+ * que además invalida las sesiones, y el motivo es más fuerte de lo que parece:
+ * `beforeSessionCreation` —el candado que comprueba `activo`— solo se invoca
+ * desde `createSession`. El refresco de token NO pasa por ahí (verificado en
+ * `refreshSession.js`, TAL-69 S10), así que emite JWT nuevos sin volver a mirar
+ * este campo. Con la marca puesta pero la sesión viva, esa persona seguiría
+ * renovando su token indefinidamente: solo le fallarían los datos, por
+ * `requireUsuario`. Lo que de verdad la echa es borrar la sesión.
  */
 export const marcarAcceso = internalMutation({
   args: { id: v.id("users"), activo: v.boolean() },

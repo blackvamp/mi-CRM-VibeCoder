@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUsuario } from "./authz";
+import { nombresDeUsuarios } from "./nombres";
 import { estadoDe, ESTADO_CLIENTE } from "./clientes";
 import { assertFechaISO } from "./fechas";
 
@@ -31,10 +32,14 @@ export const pendientesConCliente = query({
       .withIndex("by_hecho_vence", (q) => q.eq("hecho", false))
       .collect();
     pend.sort((a, b) => a.vence.localeCompare(b.vence));
+    // Una lectura por RESPONSABLE distinto, no por seguimiento (TAL-69, O1).
+    const nombres = await nombresDeUsuarios(
+      ctx,
+      pend.map((s) => s.responsableId),
+    );
     return await Promise.all(
       pend.map(async (s) => {
         const cliente = await ctx.db.get(s.clienteId);
-        const responsable = await ctx.db.get(s.responsableId);
         return {
           _id: s._id,
           accion: s.accion,
@@ -43,7 +48,7 @@ export const pendientesConCliente = query({
           clienteNombre: cliente?.nombre ?? "(cliente eliminado)",
           clienteEstado: await estadoDe(ctx, s.clienteId),
           responsableId: s.responsableId,
-          responsableNombre: responsable?.name,
+          responsableNombre: nombres.get(s.responsableId),
         };
       }),
     );
@@ -75,17 +80,16 @@ export const pendientesDeCliente = query({
         q.eq("clienteId", args.clienteId).eq("hecho", false),
       )
       .collect();
-    return await Promise.all(
-      pend.map(async (s) => {
-        const responsable = await ctx.db.get(s.responsableId);
-        return {
-          _id: s._id,
-          accion: s.accion,
-          vence: s.vence,
-          responsableNombre: responsable?.name,
-        };
-      }),
+    const nombres = await nombresDeUsuarios(
+      ctx,
+      pend.map((s) => s.responsableId),
     );
+    return pend.map((s) => ({
+      _id: s._id,
+      accion: s.accion,
+      vence: s.vence,
+      responsableNombre: nombres.get(s.responsableId),
+    }));
   },
 });
 
@@ -127,19 +131,19 @@ export const completadosDeCliente = query({
       .order("desc")
       .take(HISTORIAL_MAX + 1);
     const truncado = leidos.length > HISTORIAL_MAX;
-    const items = await Promise.all(
-      leidos.slice(0, HISTORIAL_MAX).map(async (s) => {
-        const responsable = await ctx.db.get(s.responsableId);
-        return {
-          _id: s._id,
-          _creationTime: s._creationTime,
-          accion: s.accion,
-          // `hecho: true` siempre trae `fechaHecho`; el fallback es defensivo.
-          fecha: s.fechaHecho ?? s.vence,
-          responsableNombre: responsable?.name,
-        };
-      }),
+    const mostrados = leidos.slice(0, HISTORIAL_MAX);
+    const nombres = await nombresDeUsuarios(
+      ctx,
+      mostrados.map((s) => s.responsableId),
     );
+    const items = mostrados.map((s) => ({
+      _id: s._id,
+      _creationTime: s._creationTime,
+      accion: s.accion,
+      // `hecho: true` siempre trae `fechaHecho`; el fallback es defensivo.
+      fecha: s.fechaHecho ?? s.vence,
+      responsableNombre: nombres.get(s.responsableId),
+    }));
     return { items, truncado };
   },
 });

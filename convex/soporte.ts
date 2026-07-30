@@ -144,6 +144,41 @@ export const verUsuario = internalQuery({
 });
 
 /**
+ * Caduca ya una invitación que sigue abierta (TAL-69, S7).
+ *
+ * Sirve para dos cosas. La operativa: se invitó a una dirección equivocada y se
+ * quiere cortar el atajo sin esperar los 14 días ni tocar a la persona — el
+ * usuario sigue existiendo, con su rol, y solo deja de salir marcado en el paso
+ * 1 del acceso. Y la de verificación: es la única forma de comprobar el límite
+ * de la caducidad sin esperar dos semanas.
+ *
+ * No retira el acceso ni borra nada: quien tenga esta invitación caducada puede
+ * entrar igual con «He olvidado mi contraseña».
+ *
+ *   npx convex run soporte:caducarInvitacion '{"email":"alguien@dominio.com"}'
+ */
+export const caducarInvitacion = internalMutation({
+  args: { email: v.string() },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const email = canonico(args.email);
+    const u = await ctx.db
+      .query("users")
+      .withIndex("email", (q) => q.eq("email", email))
+      .unique();
+    if (u === null) return `no existe ningún usuario con email ${email}`;
+    if (u.contrasenaPendiente !== true) {
+      return `${email} no tiene ninguna invitación pendiente`;
+    }
+    // Se retrasa la fecha en vez de borrar la marca: así el panel puede seguir
+    // distinguiendo "invitada y sin entrar" de "nunca se le invitó", que es lo
+    // que la etiqueta «Invitación caducada» necesita decir.
+    await ctx.db.patch(u._id, { invitadaEn: 0 });
+    return `invitación de ${email} marcada como caducada`;
+  },
+});
+
+/**
  * Diagnóstico: correos guardados que NO están en forma canónica.
  *
  * El login con Google enlaza buscando `users.email` por índice, que compara la

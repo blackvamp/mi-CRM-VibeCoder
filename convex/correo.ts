@@ -23,10 +23,13 @@ export const REMITENTE = "Vibe CRM <no-reply@vibe-crm.net>";
  * CONTRATO: los tres modos de fallo (falta la API key, `fetch` no llega, o
  * Resend responde con error) lanzan **ConvexError**, nunca otro tipo de error.
  *
- * No es cosmético: `recuperacion.solicitarCodigo` distingue por el tipo, y solo
- * ante un ConvexError libera la reserva de cuota de quien no ha recibido nada.
- * Un TypeError de red escapando de aquí se confundiría con "esa cuenta no
- * existe" y le gastaría el intento a la persona.
+ * Ojo, esto ya NO es lo que decide si se libera la cuota: desde TAL-69,
+ * `recuperacion.solicitarCodigo` la libera ante cualquier fallo, porque el
+ * envoltorio de `auth:signIn` normaliza todos los errores internos y el tipo
+ * dejó de distinguirlos. El contrato se mantiene igualmente por dos razones:
+ * un ConvexError no arrastra traza de pila al cruzar hacia el cliente, y deja
+ * explícito que un fallo de entrega es una condición esperada y no un error de
+ * programación.
  */
 export async function enviarCorreo({
   to,

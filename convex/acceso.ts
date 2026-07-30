@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { invitacionVigente } from "./invitacion";
 
 /**
  * Paso 1 del acceso: la persona escribe solo su correo y el servidor decide qué
@@ -20,12 +21,16 @@ export const estaPendiente = internalQuery({
       .query("users")
       .withIndex("email", (q) => q.eq("email", args.email))
       .unique();
-    return (
-      u !== null &&
-      u.activo !== false &&
-      u.contrasenaPendiente === true &&
-      (u.rol === "propietaria" || u.rol === "comercial")
-    );
+    if (
+      u === null ||
+      u.activo === false ||
+      (u.rol !== "propietaria" && u.rol !== "comercial")
+    ) {
+      return false;
+    }
+    // La caducidad (TAL-69, S7) es lo que impide que una dirección invitada y
+    // nunca usada quede señalada aquí para siempre.
+    return invitacionVigente(u, Date.now());
   },
 });
 
@@ -43,10 +48,15 @@ export const estaPendiente = internalQuery({
  *
  * Lo único que llega a distinguirse es "a esta dirección se la invitó y aún no
  * ha entrado", un estado que se apaga solo en cuanto la persona accede
- * (`beforeSessionCreation`, convex/auth.ts). Y lo peor que se puede hacer con
- * ello es dispararle códigos a un buzón ajeno, cosa que ya limita la cuota de
- * 3/hora por correo de `recuperacion.solicitarCodigo`. Riesgo aceptado
- * conscientemente y registrado en TAL-67.
+ * (`beforeSessionCreation`, convex/auth.ts) y que, si no accede nunca, **caduca
+ * a los 14 días** (TAL-69, S7). Esa caducidad no estaba al aceptar el riesgo:
+ * sin ella, un correo mal tecleado quedaba señalado aquí para siempre, así que
+ * "se apaga solo" solo era verdad para quien de hecho entraba.
+ *
+ * Lo peor que se puede hacer con ello es dispararle códigos a un buzón ajeno,
+ * cosa que ya limita la cuota de 3/hora por correo de
+ * `recuperacion.solicitarCodigo`. Riesgo aceptado conscientemente y registrado
+ * en TAL-67.
  *
  * NO LANZA NUNCA, igual que `solicitarCodigo`: un fallo de envío que se
  * propagara solo podría venir de un correo que existe, y eso volvería a

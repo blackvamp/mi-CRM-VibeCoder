@@ -1,11 +1,13 @@
 import { convexAuth } from "@convex-dev/auth/server";
 import { Password } from "@convex-dev/auth/providers/Password";
 import Google from "@auth/core/providers/google";
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import type { DataModel, Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import { action } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { CodigoRecuperacion } from "./codigoRecuperacion";
+import { esContrasenaInservible } from "./contrasenas";
 
 const UNA_HORA_MS = 60 * 60 * 1000;
 const UN_DIA_MS = 24 * UNA_HORA_MS;
@@ -22,7 +24,16 @@ const UN_DIA_MS = 24 * UNA_HORA_MS;
  */
 const FLUJOS_PERMITIDOS = new Set(["signIn", "reset", "reset-verification"]);
 
-export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
+const {
+  auth,
+  // Se renombra porque `signIn` es ahora el envoltorio del final del fichero.
+  // El nombre público de la action NO puede cambiar: `useAuthActions()` llama a
+  // `api.auth.signIn` por nombre fijo.
+  signIn: signInLibreria,
+  signOut,
+  store,
+  isAuthenticated,
+} = convexAuth({
   providers: [
     Password<DataModel>({
       // Perfil PÚBLICO del signUp: solo email/name, NUNCA rol. Así una llamada
@@ -101,10 +112,23 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       // ConvexError y texto en español para que `mensajeError` lo muestre tal
       // cual en vez de caer en el mensaje genérico. Se ejecuta ANTES de
       // verificar el código, así que una contraseña corta no lo consume.
+      //
+      // Los dos rechazos son ConvexError a propósito, y eso importa más desde
+      // TAL-69: el envoltorio de `signIn` (abajo) normaliza cualquier otro error
+      // a un texto genérico, y solo respeta los ConvexError. Si estos dejaran de
+      // serlo, la persona vería "no se ha podido iniciar sesión" sin enterarse
+      // de que el problema es su contraseña.
       validatePasswordRequirements: (password: string) => {
         if (password.length < 8) {
           throw new ConvexError(
             "La contraseña debe tener al menos 8 caracteres.",
+          );
+        }
+        // Longitud mínima y adivinabilidad son cosas distintas: `12345678` pasa
+        // la primera y falla lo que de verdad importa (TAL-69, S3).
+        if (esContrasenaInservible(password)) {
+          throw new ConvexError(
+            "Esa contraseña es demasiado fácil de adivinar. Elige otra.",
           );
         }
       },
@@ -291,6 +315,11 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         // para que ningún valor raro del profile se cuele como "true".
         contrasenaPendiente:
           profile.contrasenaPendiente === true ? true : undefined,
+        // Cuándo se invitó, para que la marca de arriba pueda caducar (TAL-69,
+        // S7). Sin esto, una dirección invitada que nunca llega a entrar queda
+        // señalada para siempre en el paso 1 del acceso.
+        invitadaEn:
+          typeof profile.invitadaEn === "number" ? profile.invitadaEn : undefined,
       });
     },
 
@@ -342,8 +371,91 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
         throw new ConvexError("Tu acceso ha sido desactivado.");
       }
       if (usuario.contrasenaPendiente === true) {
-        await db.patch(usuario._id, { contrasenaPendiente: undefined });
+        await db.patch(usuario._id, {
+          contrasenaPendiente: undefined,
+          // `invitadaEn` solo existe para que la marca pueda caducar; una vez
+          // apagada no significa nada y se limpia con ella (TAL-69, S7).
+          invitadaEn: undefined,
+        });
       }
     },
+  },
+});
+
+export { auth, signOut, store, isAuthenticated };
+
+/**
+ * `signIn` envuelta para que NADA que no sea un ConvexError deliberado salga de
+ * ella (TAL-69, S1).
+ *
+ * ## Qué arregla
+ *
+ * Hasta aquí, la respuesta de esta action decía si un correo tenía cuenta. Los
+ * mensajes son de la librería y distinguen los casos entre sí:
+ *
+ *   InvalidAccountId ......... ese correo no tiene cuenta de contraseña
+ *   InvalidSecret ............ la tiene, y la contraseña es otra
+ *   Could not verify code .... la tiene, y el código es otro
+ *   TooManyFailedAttempts .... la tiene, y está bloqueada
+ *
+ * Comprobado en vivo el 2026-07-24 contra el deployment que sirve la web, sin
+ * autenticar y con la traza de pila incluida. Salía por TRES flujos —`signIn`,
+ * `reset` y `reset-verification`— y por el tercero sin límite ninguno de
+ * intentos: `retrieveAccount` se llama ahí sin `secret`, así que no consulta el
+ * rate limit, y como el canje manda `correo` en vez de `email` (defensa de
+ * TAL-66) tampoco hay clave con la que limitar en `verifyCodeAndSignIn`.
+ *
+ * Al convertirlos todos en el mismo ConvexError, la respuesta deja de depender
+ * de si la cuenta existe. Los ConvexError son además el único error que Convex
+ * NO redacta jamás, así que esto se comporta igual en dev que en producción —
+ * que es justo lo que hace falta mientras la web corra sobre dev (TAL-68).
+ *
+ * ## Qué NO arregla
+ *
+ * Las demás funciones del backend siguen devolviendo su mensaje interno y su
+ * traza mientras estemos en un deployment de desarrollo. Ya no delatan qué
+ * cuentas existen, pero sí filtran rutas e internos. Eso solo lo cierra TAL-68.
+ *
+ * Tampoco iguala los TIEMPOS: una cuenta real ejecuta Scrypt y una inexistente
+ * no. Riesgo aceptado y medido, en TAL-67 punto 3.
+ *
+ * ## El punto frágil
+ *
+ * `_handler` es API interna de Convex. Es la única vía posible: el cliente de
+ * `@convex-dev/auth/react` llama a `api.auth.signIn` por nombre fijo, así que la
+ * action tiene que seguir llamándose así y siendo pública, y una action
+ * registrada no se puede invocar directamente. Presente y tipado en Convex
+ * 1.42.1. Si una actualización lo quitara, el acceso dejaría de funcionar de
+ * forma evidente —no en silencio— y lo detecta la primera prueba de acceso.
+ */
+export const signIn = action({
+  // Los MISMOS argumentos que declara la librería. Si divergen, el cliente deja
+  // de poder entrar.
+  args: {
+    provider: v.optional(v.string()),
+    params: v.optional(v.any()),
+    verifier: v.optional(v.string()),
+    refreshToken: v.optional(v.string()),
+    calledBy: v.optional(v.string()),
+  },
+  // `v.any()` porque la forma de la respuesta depende del flujo: `{redirect,
+  // verifier}` al empezar con Google, `{tokens}` al entrar, `{started:true}` al
+  // pedir un código. Es el mismo contrato que la librería, que no lo declara.
+  returns: v.any(),
+  handler: async (ctx, args) => {
+    try {
+      const manejador = (
+        signInLibreria as unknown as {
+          _handler: (ctx: ActionCtx, args: unknown) => Promise<unknown>;
+        }
+      )._handler;
+      return await manejador(ctx, args);
+    } catch (error) {
+      // Los ConvexError son mensajes escritos por nosotros a propósito y que la
+      // persona necesita leer: contraseña demasiado corta o demasiado fácil.
+      // Todo lo demás sale con el mismo texto para cualquier correo.
+      if (error instanceof ConvexError) throw error;
+      throw new ConvexError("No se ha podido iniciar sesión.");
+    }
   },
 });

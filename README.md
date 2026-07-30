@@ -70,6 +70,17 @@ src/lib/           Utilidades (fechas locales, api de Convex, guard de auth, nav
 - `/equipo` comprueba el rol server-side (solo la dueña), y las funciones del panel exigen además `requirePropietaria` por su cuenta. Las reglas que protegen el CRM —no retirarte el acceso a ti misma, no quitarte el rol de dueña, no dejar el negocio sin ninguna dueña activa— se comprueban **dentro de la mutation**, no ocultando botones.
 - `auth:signIn` es una action **pública**: `Password.profile()` solo admite los flujos `signIn`, `reset` y `reset-verification`. En particular `signUp` está cerrado, porque con la cuenta ya creada ese camino comparaba contraseñas **sin pasar por el límite de intentos** (TAL-66).
 - Duración de sesión, caducidad del JWT y número de intentos están **declarados** en `convex/auth.ts`, no heredados de la librería.
+- La contraseña exige 8 caracteres **y** no estar en la lista de las adivinables (`convex/contrasenas.ts`). La longitud sola no significaba nada: `12345678` la cumplía.
+
+### `auth:signIn` va envuelta, y por qué (TAL-69)
+
+Los mensajes de error de la librería distinguen los casos entre sí — `InvalidAccountId` cuando ese correo no tiene cuenta, `InvalidSecret` cuando la tiene y la contraseña es otra, `Could not verify code` cuando el código no cuadra. Cualquiera puede leer esa diferencia desde la consola del navegador, y eso es **enumeración de cuentas**: exactamente lo que TAL-66 creyó cerrar clausurando `signUp`. La fuga no estaba en `signUp`, estaba en los textos, y salía por los tres flujos.
+
+Por eso `convex/auth.ts` exporta un envoltorio: todo error que no sea un `ConvexError` deliberado sale con el mismo texto para cualquier correo. Se eligió `ConvexError` porque es el único que Convex **no redacta jamás**, así que funciona igual en dev que en producción — y hoy la web corre sobre dev (TAL-68).
+
+Dos cosas que este envoltorio **no** arregla: las demás funciones del backend siguen mandando su mensaje interno y su traza mientras estemos en un deployment de desarrollo, y los **tiempos** no se igualan (una cuenta real ejecuta Scrypt y una inexistente no). Lo primero es TAL-68; lo segundo, TAL-67.
+
+Consecuencia práctica: `validatePasswordRequirements` lanza `ConvexError` a propósito. Si dejara de hacerlo, quien escriba una contraseña mala vería «no se ha podido iniciar sesión» sin enterarse de por qué.
 
 ### Acceso retirado: dos candados, no uno (TAL-60)
 
@@ -80,9 +91,13 @@ Desactivar a alguien necesita las dos mitades, y por motivos distintos:
 
 Ese mismo callback es el único sitio que apaga la marca `contrasenaPendiente`, y va ahí porque es la misma transacción que inserta la sesión: si el acceso se abandona a mitad o se rechaza, Convex revierte también el apagado y la marca se conserva.
 
+**Matiz que importa (TAL-69):** el primer candado actúa al **nacer** la sesión y nunca después. El refresco de token no pasa por `beforeSessionCreation` —solo lo invoca `createSession`—, así que emite JWT nuevos sin volver a mirar `activo`. Lo que de verdad echa a alguien es borrar su sesión, que es lo que hace `usuarios.desactivar` con `invalidateSessions`. Por eso **`usuarios:marcarAcceso` no debe ejecutarse suelta por CLI** para retirar un acceso: dejaría a esa persona renovando su token indefinidamente, con los datos fallando pero la sesión viva.
+
 ### Acceso en dos pasos, y lo que revela
 
-`/login` pide primero el correo y `acceso.comprobarCorreo` decide qué viene después. Solo responde «código» a quien fue invitado y aún no ha entrado; **un correo desconocido se comporta exactamente igual que uno que ya tiene contraseña**, así que esa pantalla no dice quién tiene cuenta. Lo único distinguible es el estado de invitación pendiente, que se apaga al primer acceso: riesgo aceptado y documentado en TAL-67.
+`/login` pide primero el correo y `acceso.comprobarCorreo` decide qué viene después. Solo responde «código» a quien fue invitado y aún no ha entrado; **un correo desconocido se comporta exactamente igual que uno que ya tiene contraseña**, así que esa pantalla no dice quién tiene cuenta. Lo único distinguible es el estado de invitación pendiente: riesgo aceptado y documentado en TAL-67.
+
+Ese estado se apaga al primer acceso y, si la persona no llega a entrar nunca, **caduca a los 14 días** (`convex/invitacion.ts`). Sin esa caducidad, una dirección mal tecleada quedaba señalada ahí para siempre. Quien caduque no pierde el acceso: el paso 1 le manda a la pantalla de contraseña y «He olvidado mi contraseña» le da un código igual. En `/equipo` se distingue con la etiqueta «Invitación caducada».
 
 ### Correos: ningún enlace de un solo uso
 
