@@ -22,6 +22,7 @@ type Miembro = {
   rol: Rol;
   activo: boolean;
   pendiente: boolean;
+  caducada: boolean;
 };
 
 /**
@@ -133,6 +134,13 @@ export function EquipoClient({ yoId }: { yoId: Id<"users"> }) {
                     <>
                       {m.pendiente && (
                         <Badge status="warning">Pendiente de entrar</Badge>
+                      )}
+                      {/* Invitada hace más de dos semanas y todavía sin entrar.
+                          No está bloqueada: puede acceder con «He olvidado mi
+                          contraseña». Se distingue para que la dueña sepa que
+                          aquí ya no basta con esperar. */}
+                      {m.caducada && (
+                        <Badge status="neutral">Invitación caducada</Badge>
                       )}
                       <Badge
                         status={m.rol === "propietaria" ? "primary" : "neutral"}

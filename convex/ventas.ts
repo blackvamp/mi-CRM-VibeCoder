@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUsuario } from "./authz";
+import { nombresDeUsuarios } from "./nombres";
 import { assertFechaISO, assertNoPosteriorAHoyMundial } from "./fechas";
 
 export const ESTADO_VENTA = v.union(
@@ -144,20 +145,21 @@ export const listarPorCliente = query({
       .order("desc")
       .take(HISTORIAL_MAX + 1);
     const truncado = leidas.length > HISTORIAL_MAX;
-    const items = await Promise.all(
-      leidas.slice(0, HISTORIAL_MAX).map(async (venta) => {
-        const autor = await ctx.db.get(venta.autorId);
-        return {
-          _id: venta._id,
-          _creationTime: venta._creationTime,
-          concepto: venta.concepto,
-          importe: venta.importe,
-          estado: venta.estado,
-          fecha: venta.fecha,
-          autorNombre: autor?.name,
-        };
-      }),
+    const mostradas = leidas.slice(0, HISTORIAL_MAX);
+    // Una lectura por AUTOR distinto, no por venta (TAL-69, O1).
+    const nombres = await nombresDeUsuarios(
+      ctx,
+      mostradas.map((venta) => venta.autorId),
     );
+    const items = mostradas.map((venta) => ({
+      _id: venta._id,
+      _creationTime: venta._creationTime,
+      concepto: venta.concepto,
+      importe: venta.importe,
+      estado: venta.estado,
+      fecha: venta.fecha,
+      autorNombre: nombres.get(venta.autorId),
+    }));
     return { items, truncado };
   },
 });

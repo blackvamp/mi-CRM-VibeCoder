@@ -56,6 +56,15 @@ export default defineSchema({
     // sitio, `beforeSessionCreation` (convex/auth.ts), que es la misma
     // transacción que inserta la sesión — así apagarla y entrar son atómicos.
     contrasenaPendiente: v.optional(v.boolean()),
+
+    // Cuándo se mandó esa invitación (TAL-69, S7). Existe solo para que la marca
+    // de arriba pueda CADUCAR: sin esto, una dirección invitada que nunca llega
+    // a entrar —un correo mal tecleado, alguien que no se incorpora— queda
+    // señalada para siempre en el paso 1 del acceso, que es una fuga permanente
+    // por algo que ya no va a pasar. A los 14 días deja de contar.
+    //
+    // Se escribe con `contrasenaPendiente` y se borra con ella.
+    invitadaEn: v.optional(v.number()),
   }).index("email", ["email"]),
 
   // Cuota de solicitudes de recuperación de contraseña (TAL-65). Los CÓDIGOS no
@@ -69,7 +78,12 @@ export default defineSchema({
     momento: v.number(),
     // Compuesto: permite leer solo la ventana de la última hora de un correo en
     // vez de todo su histórico.
-  }).index("by_email_momento", ["email", "momento"]),
+  })
+    .index("by_email_momento", ["email", "momento"])
+    // Por antigüedad y SIN el correo, que es lo que el compuesto de arriba no
+    // permite: su primera columna es el email, así que barrer "todo lo viejo"
+    // exigiría recorrer la tabla entera. Lo usa el cron de limpieza (TAL-69, S2).
+    .index("by_momento", ["momento"]),
 
   clientes: defineTable({
     nombre: v.string(),

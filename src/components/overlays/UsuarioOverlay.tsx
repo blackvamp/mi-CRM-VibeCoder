@@ -8,6 +8,7 @@ import { Overlay } from "@/components/ui/Overlay";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { ChipGroup } from "@/components/ui/ChipGroup";
+import { ConfirmarOverlay } from "@/components/overlays/ConfirmarOverlay";
 import { mensajeError } from "@/lib/errores";
 import { ROL_OPCIONES, type Rol } from "@/lib/roles";
 
@@ -46,6 +47,19 @@ export function UsuarioOverlay({ persona, onClose, onHecho }: Props) {
   const [rol, setRol] = useState<Rol>(() => persona?.rol ?? "comercial");
   const [error, setError] = useState<string | null>(null);
   const [guardando, setGuardando] = useState(false);
+  const [confirmandoAscenso, setConfirmandoAscenso] = useState(false);
+
+  /**
+   * Convertir a alguien en dueña es la acción que más privilegio concede de todo
+   * el CRM: gestiona al equipo entero y puede retirarle el acceso a quien la
+   * ascendió. Retirar un acceso ya pedía confirmación; esto no, y se hacía
+   * pulsando un chip (TAL-69, S11).
+   *
+   * Solo en edición: en el alta, el rol se elige a la vez que se crea a la
+   * persona y el propio formulario ya es el acto deliberado.
+   */
+  const asciendeADuena =
+    !esAlta && persona.rol !== "propietaria" && rol === "propietaria";
 
   async function guardar() {
     setError(null);
@@ -55,6 +69,10 @@ export function UsuarioOverlay({ persona, onClose, onHecho }: Props) {
     }
     if (!email.trim()) {
       setError("Indica su correo.");
+      return;
+    }
+    if (asciendeADuena && !confirmandoAscenso) {
+      setConfirmandoAscenso(true);
       return;
     }
     setGuardando(true);
@@ -79,6 +97,25 @@ export function UsuarioOverlay({ persona, onClose, onHecho }: Props) {
       setError(mensajeError(e, "No se pudo guardar. Revisa los datos."));
       setGuardando(false);
     }
+  }
+
+  if (confirmandoAscenso) {
+    return (
+      <ConfirmarOverlay
+        titulo="Hacerla dueña"
+        textoConfirmar="Sí, hacerla dueña"
+        onConfirmar={guardar}
+        onClose={() => setConfirmandoAscenso(false)}
+      >
+        <>
+          <strong className="font-semibold text-text">
+            {nombre.trim() || "Esta persona"}
+          </strong>{" "}
+          podrá gestionar el equipo entero: dar de alta, cambiar roles y retirar
+          el acceso a cualquiera, incluida tú.
+        </>
+      </ConfirmarOverlay>
+    );
   }
 
   return (

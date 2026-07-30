@@ -3,7 +3,8 @@
 import { Component, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthActions } from "@convex-dev/auth/react";
-import { ShieldAlert } from "lucide-react";
+import { ConvexError } from "convex/values";
+import { RotateCw, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { mensajeError } from "@/lib/errores";
 
@@ -24,18 +25,45 @@ import { mensajeError } from "@/lib/errores";
  * rota sin ninguna explicación.
  */
 
-function Aviso({ error }: { error: unknown }) {
+/**
+ * El aviso, exportado porque lo usan DOS sitios (TAL-69, S8): este límite de
+ * error y la página `/equipo`, que hace su consulta en el servidor y no puede
+ * apoyarse en un límite de cliente.
+ *
+ * Lo importante de este componente no es lo que enseña, es lo que hace el botón:
+ * espera a que `signOut()` termine y solo entonces navega. Redirigir sin cerrar
+ * la sesión no sirve de nada —el token seguiría en el navegador, `src/proxy.ts`
+ * lo daría por autenticado y rebotaría a `/hoy`—, así que el orden es la mitad
+ * del arreglo.
+ */
+export function AvisoDeAcceso({
+  mensaje,
+  tono,
+  onReintentar,
+}: {
+  mensaje: string;
+  /**
+   * `"acceso"` cuando el servidor ha dicho que esta persona no puede seguir;
+   * `"fallo"` cuando no sabemos qué ha pasado y probablemente sea pasajero.
+   */
+  tono: "acceso" | "fallo";
+  /**
+   * Si se pasa, se ofrece volver a intentarlo. Solo tiene sentido donde haya
+   * algo que reintentar: en `/equipo` la consulta ocurrió en el servidor y no
+   * hay estado que reiniciar, así que allí no se pasa.
+   */
+  onReintentar?: () => void;
+}) {
   const { signOut } = useAuthActions();
   const router = useRouter();
   const [saliendo, setSaliendo] = useState(false);
-  const mensaje = mensajeError(
-    error,
-    "No hemos podido cargar tus datos. Vuelve a intentarlo en un momento.",
-  );
 
-  // Se espera a que `signOut` termine y se navega, igual que en `Sidebar`.
-  // Sin la navegación la persona se quedaría mirando esta misma pantalla —
-  // el límite de error no se reinicia solo— y tendría que recargar a mano.
+  // Props planas y no el `Error` capturado, a propósito: este componente se
+  // renderiza también desde un Server Component (`/equipo`), y un Error no
+  // cruza esa frontera. De paso, el motivo interno no viaja al navegador.
+  const esDeAcceso = tono === "acceso";
+  const titulo = esDeAcceso ? "No puedes seguir" : "No hemos podido cargar esto";
+
   async function salir() {
     setSaliendo(true);
     await signOut();
@@ -46,13 +74,34 @@ function Aviso({ error }: { error: unknown }) {
     <main className="flex min-h-dvh items-center justify-center bg-bg px-4">
       <div className="w-full max-w-[400px] rounded-xl border border-border bg-surface p-6 text-center shadow-sm">
         <span className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full bg-surface-2 text-text-subtle">
-          <ShieldAlert className="size-6" aria-hidden />
+          {esDeAcceso ? (
+            <ShieldAlert className="size-6" aria-hidden />
+          ) : (
+            <RotateCw className="size-6" aria-hidden />
+          )}
         </span>
-        <h1 className="text-base font-semibold text-text">No puedes seguir</h1>
+        <h1 className="text-base font-semibold text-text">{titulo}</h1>
         <p className="mt-1.5 text-sm text-text-muted">{mensaje}</p>
-        <Button className="mt-5 w-full" loading={saliendo} onClick={salir}>
-          Cerrar sesión
-        </Button>
+
+        {onReintentar !== undefined ? (
+          <div className="mt-5 flex flex-col gap-2">
+            <Button className="w-full" onClick={onReintentar}>
+              Reintentar
+            </Button>
+            <Button
+              variant="secondary"
+              className="w-full"
+              loading={saliendo}
+              onClick={salir}
+            >
+              Cerrar sesión
+            </Button>
+          </div>
+        ) : (
+          <Button className="mt-5 w-full" loading={saliendo} onClick={salir}>
+            Cerrar sesión
+          </Button>
+        )}
       </div>
     </main>
   );
@@ -75,7 +124,30 @@ export class LimiteDeError extends Component<Props, State> {
 
   render() {
     if (this.state.error !== null) {
-      return <Aviso error={this.state.error} />;
+      const error = this.state.error;
+      // Distinguir "te han retirado el acceso" de "algo ha fallado" (TAL-69,
+      // S9). Nuestros mensajes de autorización llegan como ConvexError con
+      // texto; un corte de red, no. Antes todo salía como «No puedes seguir»
+      // con un único botón de cerrar sesión, así que un fallo pasajero parecía
+      // una expulsión y la única salida ofrecida era irse.
+      const esDeAcceso =
+        error instanceof ConvexError && typeof error.data === "string";
+      return (
+        <AvisoDeAcceso
+          tono={esDeAcceso ? "acceso" : "fallo"}
+          mensaje={mensajeError(
+            error,
+            "Puede ser un problema de conexión. Vuelve a intentarlo en un momento.",
+          )}
+          // Reiniciar el estado vuelve a montar el árbol y repite las consultas.
+          // Sin esto el límite no se recupera nunca y hay que recargar a mano.
+          // No se ofrece cuando el acceso está retirado: ahí no hay nada que
+          // reintentar, y volver a intentarlo sería solo insistir.
+          onReintentar={
+            esDeAcceso ? undefined : () => this.setState({ error: null })
+          }
+        />
+      );
     }
     return this.props.children;
   }

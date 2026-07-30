@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireUsuario } from "./authz";
+import { nombresDeUsuarios } from "./nombres";
 import { assertFechaISO, assertNoPosteriorAHoyMundial } from "./fechas";
 
 export const CANAL_INTERACCION = v.union(
@@ -88,19 +89,20 @@ export const listarPorCliente = query({
       .order("desc")
       .take(HISTORIAL_MAX + 1);
     const truncado = leidas.length > HISTORIAL_MAX;
-    const items = await Promise.all(
-      leidas.slice(0, HISTORIAL_MAX).map(async (i) => {
-        const autor = await ctx.db.get(i.autorId);
-        return {
-          _id: i._id,
-          _creationTime: i._creationTime,
-          fecha: i.fecha,
-          canal: i.canal,
-          texto: i.texto,
-          autorNombre: autor?.name,
-        };
-      }),
+    const mostradas = leidas.slice(0, HISTORIAL_MAX);
+    // Una lectura por AUTOR distinto, no por interacción (TAL-69, O1).
+    const nombres = await nombresDeUsuarios(
+      ctx,
+      mostradas.map((i) => i.autorId),
     );
+    const items = mostradas.map((i) => ({
+      _id: i._id,
+      _creationTime: i._creationTime,
+      fecha: i.fecha,
+      canal: i.canal,
+      texto: i.texto,
+      autorNombre: nombres.get(i.autorId),
+    }));
     return { items, truncado };
   },
 });
