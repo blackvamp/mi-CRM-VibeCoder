@@ -21,15 +21,34 @@ export const CANAL_ORIGEN = v.union(
 /**
  * Estado calculado del cliente a partir de sus ventas (regla en schema.ts).
  * No es una función pública; se reutiliza desde otras funciones Convex.
+ *
+ * UNA sola fila resuelve el estado. Se apoya en que `by_cliente_estado` ordena
+ * por `estado` y en que el orden ascendente de los literales coincide con la
+ * prioridad de la regla: abierta < ganada < perdida. La primera fila del índice
+ * es, por tanto, la que manda; sin filas, el cliente no tiene ventas.
+ *
+ * ⚠️ ANTES DE AÑADIR UN ESTADO A `ventas`, VUELVE AQUÍ. Esa coincidencia entre
+ * el alfabeto y la prioridad del negocio es una casualidad afortunada, no un
+ * diseño: un literal como "cancelada" se ordenaría el PRIMERO y falsearía el
+ * estado de todos los clientes que lo tuvieran. Si el orden deja de coincidir,
+ * esta función necesita una consulta por estado en orden de prioridad (más
+ * rangos de índice por cliente) o un mapa explícito de orden.
+ *
+ * Se leía antes con `collect()` de todas las ventas del cliente, lo que hacía
+ * que /clientes y /hoy —que llaman a esto una vez por fila— dependieran del
+ * volumen de ventas de cada uno. El `.order("asc")` es el valor por defecto de
+ * Convex y va explícito a propósito: deja a la vista que aquí importa cuál es
+ * la primera fila.
  */
 export async function estadoDe(ctx: QueryCtx, clienteId: Id<"clientes">) {
-  const ventas = await ctx.db
+  const venta = await ctx.db
     .query("ventas")
-    .withIndex("by_cliente_fecha", (q) => q.eq("clienteId", clienteId))
-    .collect();
-  if (ventas.length === 0) return "nuevo_lead" as const;
-  if (ventas.some((x) => x.estado === "abierta")) return "en_negociacion" as const;
-  if (ventas.some((x) => x.estado === "ganada")) return "ganado" as const;
+    .withIndex("by_cliente_estado", (q) => q.eq("clienteId", clienteId))
+    .order("asc")
+    .first();
+  if (venta === null) return "nuevo_lead" as const;
+  if (venta.estado === "abierta") return "en_negociacion" as const;
+  if (venta.estado === "ganada") return "ganado" as const;
   return "perdido" as const;
 }
 
@@ -47,8 +66,10 @@ export const listar = query({
 /**
  * Lista de clientes con estado calculado y "último contacto", para /clientes (F3).
  *
- * Escala MVP: `collect()` de toda la tabla + enriquecido N+1 por cliente (`estadoDe`
- * colecta ventas). Aceptable para decenas de clientes; a cientos/miles habría que
+ * Escala MVP: `collect()` de toda la tabla + dos consultas por cliente (`estadoDe` y
+ * el último contacto), ambas de una fila. El coste ya NO depende de cuántas ventas
+ * tenga cada cliente, pero sí sigue creciendo con el número de clientes: dos rangos
+ * de índice por fila, sobre un techo de 4.096 por transacción. A miles habría que
  * paginar o mover la búsqueda al servidor — NO dejar este patrón como implícito si
  * el volumen crece.
  *
