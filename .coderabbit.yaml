@@ -62,10 +62,17 @@ reviews:
       mode: "off"
 
   # Nada que revisar fuera del código fuente propio.
+  #
+  # `package-lock.json` va INCLUIDO a propósito, y cuesta un poco de explicar:
+  # estos patrones no solo deciden qué se revisa, también alimentan el
+  # `git sparse-checkout` con el que CodeRabbit clona el repo. Excluirlo dejaba
+  # el lockfile fuera del disco, y entonces `osvScanner` no tenía nada que
+  # analizar: nos quedábamos sin el aviso de dependencias vulnerables, que es
+  # justo de lo que sí queremos enterarnos. Lo señaló CodeRabbit en el PR #10.
   path_filters:
+    - "package-lock.json"
     - "!node_modules/**"
     - "!.next/**"
-    - "!package-lock.json"
     - "!tsconfig.tsbuildinfo"
     - "!.playwright-mcp/**"
     - "!public/**"

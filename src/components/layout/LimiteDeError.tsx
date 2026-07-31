@@ -128,12 +128,27 @@ function VolverAlLogin() {
   const { signOut } = useAuthActions();
   // El límite de error puede volver a renderizar; el envío va una sola vez.
   const yaVa = useRef(false);
+  const [noSePudoSalir, setNoSePudoSalir] = useState(false);
 
   useEffect(() => {
     if (yaVa.current) return;
     yaVa.current = true;
     void (async () => {
-      await signOut();
+      try {
+        await signOut();
+      } catch {
+        // Si el cierre falla, NO se navega igualmente, y esto lo señaló
+        // CodeRabbit en el PR #10: sin la salida manual, la pantalla se
+        // quedaba clavada en "Volviendo a la pantalla de acceso…" para
+        // siempre. Y navegar a ciegas tampoco vale: si `signOut` no llegó a
+        // limpiar el token, `src/proxy.ts` rebota a /hoy, allí vuelve a
+        // fallar la consulta y se entra en un bucle entre las dos pantallas.
+        //
+        // La salida es devolver el aviso con su botón, que es exactamente lo
+        // que había antes de este componente.
+        setNoSePudoSalir(true);
+        return;
+      }
       // Navegación DURA, y no `router.replace`, que es lo que se usa en el
       // resto de la aplicación. Comprobado al probar TAL-61: desde dentro de un
       // límite de error que ya ha sustituido el árbol, la navegación de cliente
@@ -146,6 +161,15 @@ function VolverAlLogin() {
       window.location.replace("/login");
     })();
   }, [signOut]);
+
+  if (noSePudoSalir) {
+    return (
+      <AvisoDeAcceso
+        tono="acceso"
+        mensaje="Tu sesión ha terminado, pero no hemos podido cerrarla del todo. Vuelve a intentarlo."
+      />
+    );
+  }
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-bg px-4">
