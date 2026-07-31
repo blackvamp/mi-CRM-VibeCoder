@@ -17,6 +17,9 @@ import { authTables } from "@convex-dev/auth/server";
  *   - alguna venta "abierta"        -> "en_negociacion"
  *   - sin abiertas, alguna "ganada" -> "ganado"
  *   - todas "perdida"               -> "perdido"
+ * Se resuelve con UNA fila del índice `by_cliente_estado` de `ventas`, no
+ * leyendo todas sus ventas — ver el aviso en `estadoDe` antes de tocar los
+ * literales de `ventas.estado`.
  *
  * Las fechas (fecha, vence, fechaHecho) se guardan como string ISO "YYYY-MM-DD"
  * (sin hora), en zona local del usuario — el orden lexicográfico coincide con el
@@ -100,9 +103,14 @@ export default defineSchema({
     ),
     nota: v.optional(v.string()),
     // "fecha de alta" = _creationTime (campo automático de Convex).
-  })
-    .index("by_email", ["email"])
-    .searchIndex("search_nombre", { searchField: "nombre" }),
+    //
+    // Sin índices: la lista se lee entera (`listarConEstado`) y el filtrado por
+    // nombre/email/teléfono ocurre en el navegador (ClientesClient). Había aquí
+    // un `by_email` y un `searchIndex("search_nombre")` que no consultaba nadie
+    // — solo se pagaban en cada alta y edición. Si algún día se avisa de
+    // clientes duplicados por correo, `by_email` vuelve; hoy no hay tal regla y
+    // el índice no la insinúa.
+  }),
 
   interacciones: defineTable({
     clienteId: v.id("clientes"),
@@ -154,9 +162,17 @@ export default defineSchema({
     autorId: v.id("users"),
     // Compuesto por la misma razón que en `interacciones`: el historial de la
     // ficha ordena por `fecha` y se trunca con `take`, así que el índice tiene
-    // que ordenar por ese campo o se descartarían filas equivocadas. Sirve
-    // también para consultar solo por `clienteId` (prefijo), que es lo que hace
-    // `estadoDe`. No hay `by_estado`: /ventas necesita los cuatro contadores a
-    // la vez, así que lee la tabla entera una vez y filtra en memoria.
-  }).index("by_cliente_fecha", ["clienteId", "fecha"]),
+    // que ordenar por ese campo o se descartarían filas equivocadas.
+  })
+    .index("by_cliente_fecha", ["clienteId", "fecha"])
+    // Para `estadoDe`, que antes leía TODAS las ventas del cliente por el
+    // prefijo `clienteId` de arriba. Ordenado por `estado`, la primera fila ya
+    // es la que decide el estado del cliente, así que basta una lectura: el
+    // coste deja de depender de cuántas ventas tenga. Ver el aviso sobre el
+    // orden de los literales en `estadoDe` (convex/clientes.ts).
+    //
+    // Sigue sin haber `by_estado` a secas: /ventas necesita los cuatro
+    // contadores a la vez, así que lee la tabla entera una vez y filtra en
+    // memoria.
+    .index("by_cliente_estado", ["clienteId", "estado"]),
 });

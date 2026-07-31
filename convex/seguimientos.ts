@@ -3,7 +3,7 @@ import { query, mutation } from "./_generated/server";
 import { requireUsuario } from "./authz";
 import { nombresDeUsuarios } from "./nombres";
 import { estadoDe, ESTADO_CLIENTE } from "./clientes";
-import { assertFechaISO } from "./fechas";
+import { assertFechaISO, assertNoPosteriorAHoyMundial } from "./fechas";
 
 /**
  * Todos los seguimientos pendientes del negocio, con datos del cliente y del
@@ -187,15 +187,28 @@ export const crear = mutation({
   },
 });
 
-/** Marca un seguimiento como hecho. `fechaHecho` = fecha local del cliente. */
+/**
+ * Marca un seguimiento como hecho. `fechaHecho` = fecha local del cliente.
+ *
+ * Se acota igual que en ventas e interacciones, y por un motivo propio:
+ * `completadosDeCliente` ORDENA por `fechaHecho` y trunca a `HISTORIAL_MAX`, así
+ * que una fecha futura —un reloj mal puesto, una petición manipulada— encabezaría
+ * el historial para siempre y empujaría fuera del corte a los reales. `vence` sí
+ * admite futuro (ver `crear`); esto es cuándo se HIZO.
+ */
 export const marcarHecho = mutation({
   args: { id: v.id("seguimientos"), fechaHecho: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
     const usuario = await requireUsuario(ctx);
     assertFechaISO(args.fechaHecho);
+    assertNoPosteriorAHoyMundial(args.fechaHecho, "seguimientos completados");
     const s = await ctx.db.get(args.id);
     if (s === null) throw new ConvexError("Seguimiento no encontrado");
+    // Ya cerrado: no se reescribe. Sin esto, re-marcar lo de otra persona movía
+    // `completadoPorId` a quien lo re-marcó y le quitaba a quien lo completó la
+    // única vía de deshacerlo (ver `deshacer`). Simétrico a su `if (!s.hecho)`.
+    if (s.hecho) return null;
     await ctx.db.patch(args.id, {
       hecho: true,
       fechaHecho: args.fechaHecho,
