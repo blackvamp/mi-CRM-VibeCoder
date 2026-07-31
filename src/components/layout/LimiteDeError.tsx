@@ -1,12 +1,13 @@
 "use client";
 
-import { Component, useState, type ReactNode } from "react";
+import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthActions } from "@convex-dev/auth/react";
 import { ConvexError } from "convex/values";
 import { RotateCw, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { mensajeError } from "@/lib/errores";
+import { SESION_INVALIDA } from "../../../convex/mensajes";
 
 /**
  * Red de seguridad del armazón de la aplicación (TAL-60).
@@ -107,6 +108,78 @@ export function AvisoDeAcceso({
   );
 }
 
+/**
+ * Sesión que ya no existe: se va al login sin preguntar nada (TAL-61).
+ *
+ * Cubre dos situaciones que son la misma para quien está delante:
+ *
+ *   - CERRAR SESIÓN. Entre que `signOut()` borra la sesión en el servidor y el
+ *     cliente se da por no autenticado, las consultas en vuelo se responden con
+ *     este error. Sin esto, cerrar sesión enseñaba durante un instante un
+ *     "No puedes seguir" que parecía una expulsión.
+ *   - QUE TE EXPULSEN. Cambiar la contraseña cierra las sesiones de los demás
+ *     dispositivos; en esos, lo útil es aparecer en la pantalla de acceso, no
+ *     leer un aviso con un botón que lleva justo ahí.
+ *
+ * Se cierra la sesión igualmente antes de navegar: el token sigue en el
+ * navegador y `src/proxy.ts` lo daría por bueno, rebotando de vuelta a /hoy.
+ */
+function VolverAlLogin() {
+  const { signOut } = useAuthActions();
+  // El límite de error puede volver a renderizar; el envío va una sola vez.
+  const yaVa = useRef(false);
+  const [noSePudoSalir, setNoSePudoSalir] = useState(false);
+
+  useEffect(() => {
+    if (yaVa.current) return;
+    yaVa.current = true;
+    void (async () => {
+      try {
+        await signOut();
+      } catch {
+        // Si el cierre falla, NO se navega igualmente, y esto lo señaló
+        // CodeRabbit en el PR #10: sin la salida manual, la pantalla se
+        // quedaba clavada en "Volviendo a la pantalla de acceso…" para
+        // siempre. Y navegar a ciegas tampoco vale: si `signOut` no llegó a
+        // limpiar el token, `src/proxy.ts` rebota a /hoy, allí vuelve a
+        // fallar la consulta y se entra en un bucle entre las dos pantallas.
+        //
+        // La salida es devolver el aviso con su botón, que es exactamente lo
+        // que había antes de este componente.
+        setNoSePudoSalir(true);
+        return;
+      }
+      // Navegación DURA, y no `router.replace`, que es lo que se usa en el
+      // resto de la aplicación. Comprobado al probar TAL-61: desde dentro de un
+      // límite de error que ya ha sustituido el árbol, la navegación de cliente
+      // del App Router no llega a ocurrir y la pantalla se queda con el
+      // mensaje puesto para siempre. Recargar entero es además lo más limpio
+      // aquí: el estado de la aplicación ya no sirve de nada.
+      //
+      // Va DESPUÉS del `await`: si se recargara antes de que `signOut` termine,
+      // el token seguiría en el navegador y `src/proxy.ts` rebotaría a /hoy.
+      window.location.replace("/login");
+    })();
+  }, [signOut]);
+
+  if (noSePudoSalir) {
+    return (
+      <AvisoDeAcceso
+        tono="acceso"
+        mensaje="Tu sesión ha terminado, pero no hemos podido cerrarla del todo. Vuelve a intentarlo."
+      />
+    );
+  }
+
+  return (
+    <main className="flex min-h-dvh items-center justify-center bg-bg px-4">
+      <p className="text-sm text-text-muted">
+        Volviendo a la pantalla de acceso…
+      </p>
+    </main>
+  );
+}
+
 interface Props {
   children: ReactNode;
 }
@@ -125,6 +198,12 @@ export class LimiteDeError extends Component<Props, State> {
   render() {
     if (this.state.error !== null) {
       const error = this.state.error;
+      // Sesión que ya no existe: no es una expulsión que explicar, es volver a
+      // entrar. Se comprueba antes que nada porque también llega como
+      // ConvexError con texto y si no caería en la rama de acceso de abajo.
+      if (error instanceof ConvexError && error.data === SESION_INVALIDA) {
+        return <VolverAlLogin />;
+      }
       // Distinguir "te han retirado el acceso" de "algo ha fallado" (TAL-69,
       // S9). Nuestros mensajes de autorización llegan como ConvexError con
       // texto; un corte de red, no. Antes todo salía como «No puedes seguir»

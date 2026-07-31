@@ -85,8 +85,8 @@ acaba de cambiar, y de que se ha cerrado la sesión en tus otros dispositivos.
 
 Si has sido tú, no tienes que hacer nada.
 
-Si NO has sido tú, alguien ha entrado en tu correo: cambia cuanto antes la
-contraseña de tu cuenta de correo y avisa a la responsable del CRM.
+Si NO has sido tú, alguien ha usado tu cuenta: avisa cuanto antes a la
+responsable del CRM y cambia también la contraseña de tu correo.
 
 — Vibe CRM`;
 }
@@ -107,8 +107,8 @@ function htmlCambio(): string {
       Si has sido tú, no tienes que hacer nada.
     </p>
     <p style="margin:0;font-size:14px;line-height:1.5;color:#78716c">
-      Si no has sido tú, alguien ha entrado en tu correo: cambia cuanto antes la
-      contraseña de tu cuenta de correo y avisa a la responsable del CRM.
+      Si no has sido tú, alguien ha usado tu cuenta: avisa cuanto antes a la
+      responsable del CRM y cambia también la contraseña de tu correo.
     </p>
   </div>
 </div>`;
@@ -140,6 +140,80 @@ export const avisarCambioContrasena = internalAction({
     } catch {
       // Sin el correo en el log: es compartido.
       console.error("aviso de cambio: no se pudo enviar");
+    }
+    return null;
+  },
+});
+
+const ASUNTO_CAMBIO_CORREO = "El correo de tu cuenta de Vibe CRM ha cambiado";
+
+function textoCambioCorreo(emailNuevo: string): string {
+  return `Hola,
+
+El correo con el que entras en Vibe CRM acaba de cambiar a ${emailNuevo}.
+
+A partir de ahora tienes que entrar con esa dirección, y los códigos para
+recuperar la contraseña llegarán allí. Esta dirección ya no sirve para entrar.
+
+Si has sido tú, no tienes que hacer nada.
+
+Si NO has sido tú, alguien ha usado tu cuenta: avisa cuanto antes a la
+responsable del CRM, que puede devolver el correo a su sitio.
+
+— Vibe CRM`;
+}
+
+function htmlCambioCorreo(emailNuevo: string): string {
+  const nuevo = escaparHtml(emailNuevo);
+  return `<div style="margin:0;padding:24px;background:#f5f5f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1c1917">
+  <div style="max-width:480px;margin:0 auto;background:#ffffff;border:1px solid #e7e5e4;border-radius:12px;padding:28px">
+    <p style="margin:0 0 4px;font-size:17px;font-weight:600">Vibe CRM</p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.5">
+      El correo con el que entras en Vibe CRM acaba de cambiar a
+      <strong>${nuevo}</strong>.
+    </p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.5">
+      A partir de ahora tienes que entrar con esa dirección, y los códigos para
+      recuperar la contraseña llegarán allí. Esta dirección ya no sirve para
+      entrar.
+    </p>
+    <p style="margin:0 0 16px;font-size:15px;line-height:1.5">
+      Si has sido tú, no tienes que hacer nada.
+    </p>
+    <p style="margin:0;font-size:14px;line-height:1.5;color:#78716c">
+      Si no has sido tú, alguien ha usado tu cuenta: avisa cuanto antes a la
+      responsable del CRM, que puede devolver el correo a su sitio.
+    </p>
+  </div>
+</div>`;
+}
+
+/**
+ * Aviso de que el correo de acceso ha cambiado (TAL-61).
+ *
+ * Va al buzón ANTERIOR, que es la parte que importa: si quien hizo el cambio no
+ * fue la persona, el correo nuevo está en manos ajenas y avisar allí no serviría
+ * de nada. Este es el único aviso que llega a un sitio que el atacante ya no
+ * controla, y por eso dice a quién acudir.
+ *
+ * Lo programa `cuenta.guardarMisDatos` con el scheduler, después de que el
+ * cambio se haya aplicado. Entrega best-effort: un fallo de Resend se registra y
+ * no deshace nada.
+ */
+export const avisarCambioCorreo = internalAction({
+  args: { email: v.string(), emailNuevo: v.string() },
+  returns: v.null(),
+  handler: async (_ctx, args): Promise<null> => {
+    try {
+      await enviarCorreo({
+        to: args.email,
+        subject: ASUNTO_CAMBIO_CORREO,
+        text: textoCambioCorreo(args.emailNuevo),
+        html: htmlCambioCorreo(args.emailNuevo),
+      });
+    } catch {
+      // Sin el correo en el log: es compartido.
+      console.error("aviso de cambio de correo: no se pudo enviar");
     }
     return null;
   },

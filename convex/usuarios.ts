@@ -11,25 +11,10 @@ import { internal } from "./_generated/api";
 import type { DataModel, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { requireUsuario, requirePropietaria } from "./authz";
-import { migrarCorreo } from "./identidad";
+import { canonico, esCorreoValido, migrarCorreo } from "./identidad";
 import { invitacionVigente } from "./invitacion";
 
 const ROL = v.union(v.literal("propietaria"), v.literal("comercial"));
-
-/** Forma canónica de un correo: la que se guarda y con la que se compara. */
-function canonico(email: string): string {
-  return email.trim().toLowerCase();
-}
-
-/**
- * Validación de correo deliberadamente laxa: algo@algo.algo, sin espacios.
- * Las reglas reales de una dirección de correo son mucho más raras de lo que
- * cualquier expresión regular admite, y rechazar una dirección legítima deja a
- * una persona fuera del CRM. Quien de verdad valida el correo es el envío.
- */
-function esCorreoValido(email: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-}
 
 /**
  * Contraseña inicial de quien se invita: 40 caracteres de un alfabeto de 32
@@ -269,6 +254,21 @@ export const actualizar = mutation({
     // control del CRM sin darse cuenta.
     if (usuario._id === duena._id && args.rol !== "propietaria") {
       throw new ConvexError("No puedes quitarte a ti misma el rol de dueña");
+    }
+    // El correo PROPIO no se cambia desde aquí (TAL-61).
+    //
+    // En "Mi cuenta", cambiar el correo exige escribir la contraseña actual,
+    // porque el correo es la identidad de acceso: con él se recupera la
+    // contraseña. Sin esta línea, ese control se saltaba por la puerta de al
+    // lado —la dueña se edita a sí misma en /equipo, donde no se pide nada— y
+    // cualquiera que encontrara una sesión de dueña abierta podía mover la
+    // cuenta a un buzón propio y quedársela. Editar el correo de OTRA persona
+    // sigue permitido: ahí la contraseña de esa persona no la conoce nadie, y
+    // el gesto ya es deliberado y trazable.
+    if (usuario._id === duena._id && email !== usuario.email) {
+      throw new ConvexError(
+        "Tu propio correo se cambia desde Mi cuenta, escribiendo tu contraseña",
+      );
     }
     // Y esta es la misma regla vista desde el otro lado: si esta persona es la
     // última dueña activa, degradarla dejaría el negocio sin nadie que pueda

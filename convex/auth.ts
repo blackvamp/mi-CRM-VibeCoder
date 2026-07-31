@@ -7,7 +7,7 @@ import { action } from "./_generated/server";
 import type { ActionCtx, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { CodigoRecuperacion } from "./codigoRecuperacion";
-import { esContrasenaInservible } from "./contrasenas";
+import { validarContrasena } from "./contrasenas";
 
 const UNA_HORA_MS = 60 * 60 * 1000;
 const UN_DIA_MS = 24 * UNA_HORA_MS;
@@ -113,25 +113,10 @@ const {
       // cual en vez de caer en el mensaje genérico. Se ejecuta ANTES de
       // verificar el código, así que una contraseña corta no lo consume.
       //
-      // Los dos rechazos son ConvexError a propósito, y eso importa más desde
-      // TAL-69: el envoltorio de `signIn` (abajo) normaliza cualquier otro error
-      // a un texto genérico, y solo respeta los ConvexError. Si estos dejaran de
-      // serlo, la persona vería "no se ha podido iniciar sesión" sin enterarse
-      // de que el problema es su contraseña.
-      validatePasswordRequirements: (password: string) => {
-        if (password.length < 8) {
-          throw new ConvexError(
-            "La contraseña debe tener al menos 8 caracteres.",
-          );
-        }
-        // Longitud mínima y adivinabilidad son cosas distintas: `12345678` pasa
-        // la primera y falla lo que de verdad importa (TAL-69, S3).
-        if (esContrasenaInservible(password)) {
-          throw new ConvexError(
-            "Esa contraseña es demasiado fácil de adivinar. Elige otra.",
-          );
-        }
-      },
+      // La política vive en `contrasenas.ts` y no aquí desde TAL-61, porque el
+      // cambio de contraseña de "Mi cuenta" tiene que aplicar exactamente la
+      // misma: `modifyAccountCredentials` no valida nada por su cuenta.
+      validatePasswordRequirements: validarContrasena,
     }),
     Google({
       clientId: process.env.AUTH_GOOGLE_ID,
