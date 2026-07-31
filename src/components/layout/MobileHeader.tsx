@@ -32,7 +32,13 @@ export function MobileHeader() {
           <ChevronLeft className="size-[22px]" aria-hidden />
         </button>
       )}
-      <h2 className="flex-1 truncate pl-1 text-[17px] font-semibold text-text">
+      {/*
+        Título en rojo por decisión de producto. Se usa `error-text` —y no
+        `error`— porque es el token pensado para TEXTO: se aclara en modo
+        oscuro (#fca5a5) y gana contraste sobre blanco en el claro (#991b1b).
+        Es el mismo que emplea el resto de la app para texto rojo.
+      */}
+      <h2 className="flex-1 truncate pl-1 text-[17px] font-semibold text-error-text">
         {title}
       </h2>
       <Link
