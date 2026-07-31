@@ -197,6 +197,7 @@ export function EquipoClient({ yoId }: { yoId: Id<"users"> }) {
       {editando !== null && (
         <UsuarioOverlay
           persona={editando}
+          soyYo={editando._id === yoId}
           onClose={() => setEditando(null)}
           onHecho={avisar}
         />

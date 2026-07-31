@@ -22,6 +22,8 @@ interface Persona {
 interface Props {
   /** Sin persona = alta; con persona = edición. */
   persona?: Persona;
+  /** `true` si la persona editada es quien está usando el panel. */
+  soyYo?: boolean;
   onClose: () => void;
   onHecho: (mensaje: string) => void;
 }
@@ -37,7 +39,12 @@ interface Props {
  * Se monta solo al abrir, así el `useState` perezoso precarga los datos actuales
  * sin sincronizar estado en un efecto (evita `react-hooks/set-state-in-effect`).
  */
-export function UsuarioOverlay({ persona, onClose, onHecho }: Props) {
+export function UsuarioOverlay({
+  persona,
+  soyYo = false,
+  onClose,
+  onHecho,
+}: Props) {
   const invitar = useAction(api.usuarios.invitar);
   const actualizar = useMutation(api.usuarios.actualizar);
 
@@ -160,6 +167,11 @@ export function UsuarioOverlay({ persona, onClose, onHecho }: Props) {
           required
         />
 
+        {/* El correo PROPIO no se cambia desde aquí (TAL-61): en "Mi cuenta" se
+            pide la contraseña actual, y sin este bloqueo la dueña tendría en
+            /equipo un atajo que se salta esa comprobación. El servidor lo
+            rechaza igualmente; esto solo evita escribir un cambio que no se va
+            a poder guardar. */}
         <Input
           label="Correo"
           type="email"
@@ -168,6 +180,13 @@ export function UsuarioOverlay({ persona, onClose, onHecho }: Props) {
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="nombre@empresa.com"
+          readOnly={soyYo}
+          helper={
+            soyYo
+              ? "Tu propio correo se cambia desde Mi cuenta, escribiendo tu contraseña."
+              : undefined
+          }
+          className={soyYo ? "bg-surface-2 text-text-muted" : undefined}
           required
         />
 

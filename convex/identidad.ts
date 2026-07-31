@@ -3,6 +3,28 @@ import type { MutationCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 
 /**
+ * Forma canónica de un correo: la que se guarda y con la que se compara.
+ *
+ * Vive aquí desde TAL-61 porque ya son tres los sitios que la necesitan —el
+ * alta y la edición de `usuarios.ts`, y la edición del correo propio de
+ * `cuenta.ts`— y `migrarCorreo`, justo debajo, exige recibirlo ya normalizado:
+ * los dos campos que mueve se comparan por índice con la cadena exacta.
+ */
+export function canonico(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Validación de correo deliberadamente laxa: algo@algo.algo, sin espacios.
+ * Las reglas reales de una dirección de correo son mucho más raras de lo que
+ * cualquier expresión regular admite, y rechazar una dirección legítima deja a
+ * una persona fuera del CRM. Quien de verdad valida el correo es el envío.
+ */
+export function esCorreoValido(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+/**
  * Cambiar el correo de un usuario, que es más delicado de lo que parece.
  *
  * La identidad de una persona vive en DOS sitios que hay que mover juntos:

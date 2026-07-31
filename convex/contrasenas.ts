@@ -11,8 +11,11 @@
  *
  * Este módulo es lógica pura y NO debe importar `./_generated/api`: lo usa
  * `auth.ts`, que ya está en la maraña de ciclos que rompe la inferencia de tipos
- * de Convex (ver la nota de `correo.ts`).
+ * de Convex (ver la nota de `correo.ts`). `ConvexError` viene de
+ * `convex/values` y no entra en esa maraña.
  */
+
+import { ConvexError } from "convex/values";
 
 /**
  * Las que de verdad se prueban primero. No pretende ser exhaustiva —para eso
@@ -123,4 +126,37 @@ export function esContrasenaInservible(contrasena: string): boolean {
   if (/^(.)\1*$/.test(valor)) return true;
   if (esCorrida(valor)) return true;
   return false;
+}
+
+/**
+ * La política ENTERA de contraseñas, en un solo sitio (TAL-61).
+ *
+ * La aplican los dos caminos por los que se puede fijar una contraseña, y por
+ * eso vive aquí en vez de dentro de cualquiera de ellos:
+ *
+ *   - `validatePasswordRequirements` (convex/auth.ts), que cubre el canje del
+ *     código de recuperación;
+ *   - `cuenta.cambiarContrasena`, que la fija desde "Mi cuenta" con
+ *     `modifyAccountCredentials` — y esa función de la librería NO valida
+ *     absolutamente nada por su cuenta.
+ *
+ * Si la segunda no llamara aquí, "Mi cuenta" sería el camino barato para
+ * ponerse `12345678` justo después de que TAL-69 lo prohibiera en el otro.
+ *
+ * Los dos rechazos son ConvexError a propósito: el envoltorio de `signIn`
+ * (convex/auth.ts) normaliza cualquier otro error a un texto genérico, y solo
+ * respeta los ConvexError. Si dejaran de serlo, la persona vería "no se ha
+ * podido iniciar sesión" sin enterarse de que el problema es su contraseña.
+ */
+export function validarContrasena(contrasena: string): void {
+  if (contrasena.length < 8) {
+    throw new ConvexError("La contraseña debe tener al menos 8 caracteres.");
+  }
+  // Longitud mínima y adivinabilidad son cosas distintas: `12345678` pasa la
+  // primera y falla lo que de verdad importa (TAL-69, S3).
+  if (esContrasenaInservible(contrasena)) {
+    throw new ConvexError(
+      "Esa contraseña es demasiado fácil de adivinar. Elige otra.",
+    );
+  }
 }
