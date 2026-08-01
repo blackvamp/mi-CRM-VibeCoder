@@ -50,3 +50,9 @@ next-env.d.ts
 
 # artefactos de herramientas de desarrollo (MCP, etc.)
 .playwright-mcp/
+
+# Backups de la BD de Convex (contienen datos reales)
+backups/
+
+# Archivos temporales de trabajo (carpeta tmp/ de la raíz del proyecto)
+/tmp/
